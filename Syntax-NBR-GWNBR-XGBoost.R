@@ -467,7 +467,16 @@ tabel_evaluasi <- data.frame(
                         round(deviance(model_nbr), 3),
                         round(rmse(pred_nbr), 3),
                         round(mae(pred_nbr), 3)))
+# Mengambil estimasi parameter dispersi
+theta <- model_nbr$theta
 
+# Mengambil standard error parameter dispersi
+SE_theta <- model_nbr$SE.theta
+
+# Menampilkan hasil
+cat("Theta:", theta, "\n")
+cat("SE Theta:", SE_theta, "\n")
+                          
 # E. SIMPAN SELURUH HASIL KE SATU FILE EXCEL MULTI-SHEET
 wb_02 <- createWorkbook()
 
