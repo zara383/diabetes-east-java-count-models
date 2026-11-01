@@ -1256,7 +1256,7 @@ y_pred_gwnbr_loo <- sapply(seq_len(n_loo), function(i) cv_gwnbr_predict_one(i, d
 pred_list <- list(
   "Baseline NB-offset" = pred_nb0_loo,
   "NBR"                = y_pred_nbr_loo,
-  "GWNBR"              = y_pred_gwnbr_loo,
+  "GWNBR"              = y_pred_ad,
   "XGBoost"            = as.numeric(pred_outer))
 
 rate_actual <- y_aktual / pop * 100000
