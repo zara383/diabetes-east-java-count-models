@@ -43,7 +43,8 @@ sub_folders <- c(
   "04_GWNBR",
   "05_XGBoost",
   "06_SHAP",
-  "07_Perbandingan",
+  "07_Leave_Surabaya_Out",
+  "08_Perbandingan",
   "Data_Proses"
 )
 
@@ -467,6 +468,7 @@ tabel_evaluasi <- data.frame(
                         round(deviance(model_nbr), 3),
                         round(rmse(pred_nbr), 3),
                         round(mae(pred_nbr), 3)))
+
 # Mengambil estimasi parameter dispersi
 theta <- model_nbr$theta
 
@@ -476,8 +478,103 @@ SE_theta <- model_nbr$SE.theta
 # Menampilkan hasil
 cat("Theta:", theta, "\n")
 cat("SE Theta:", SE_theta, "\n")
-                          
-# E. SIMPAN SELURUH HASIL KE SATU FILE EXCEL MULTI-SHEET
+
+# E. DIAGNOSTIK PENGARUH: COOK'S DISTANCE MODEL NBR
+# Menghitung Cook's distance
+cook_nbr <- cooks.distance(model_nbr)
+
+# Batas pemeriksaan awal 4/n
+batas_cook <- 4 / nrow(df_model)
+
+# Membuat tabel Cook's distance
+tabel_cook <- data.frame(Kabupaten = df_model$kab_kota,Cooks_Distance = as.numeric(cook_nbr),
+                         Batas_4_n = batas_cook,Melebihi_Batas = ifelse(cook_nbr > batas_cook, "Ya", "Tidak"))
+
+# Mengurutkan berdasarkan Cook's distance terbesar
+tabel_cook <- tabel_cook[order(tabel_cook$Cooks_Distance, decreasing = TRUE),]
+print(head(tabel_cook, 10))
+
+# Menampilkan hasil khusus Kota Surabaya
+hasil_cook_surabaya <- tabel_cook[tabel_cook$Kabupaten == "Kota Surabaya", ]
+print(hasil_cook_surabaya)
+
+# F. ANALISIS SENSITIVITAS TRANSFORMASI LOG X4
+# F1. Statistik deskriptif dan skewness X4 asli
+statistik_x4 <- data.frame(Variabel = c("X4 Asli", "Log X4"),
+                           Skewness = c(moments::skewness(df_model$X4),moments::skewness(log(df_model$X4))))
+
+# F2. Membuat variabel log X4
+df_model$X4_log <- log(df_model$X4)
+
+# F3. Estimasi NBR dengan X4 asli dan log X4
+model_nbr_asli <- model_nbr
+model_nbr_log <- glm.nb(Y ~ X1 + X2 + X3 + X4_log + X5 +offset(log(Jumlah_Penduduk)),data = df_model)
+
+# F4. Perbandingan AIC
+tabel_aic_sensitivitas <- data.frame(
+  Model = c("NBR X4 Asli", "NBR Log X4"),
+  AIC = c(AIC(model_nbr_asli),AIC(model_nbr_log))
+)
+
+# F5. LOOCV kedua model
+n <- nrow(df_model)
+
+pred_asli <- numeric(n)
+pred_log <- numeric(n)
+
+for (i in 1:n) {
+  
+  data_train <- df_model[-i, ]
+  data_test <- df_model[i, ]
+  
+  # NBR X4 asli
+  fit_asli <- glm.nb( Y ~ X1 + X2 + X3 + X4 + X5 +offset(log(Jumlah_Penduduk)),data = data_train)
+  pred_asli[i] <- predict(fit_asli,newdata = data_test,type = "response")
+  
+  # NBR log X4
+  fit_log <- glm.nb(Y ~ X1 + X2 + X3 + X4_log + X5 +offset(log(Jumlah_Penduduk)),data = data_train)
+  pred_log[i] <- predict(fit_log,newdata = data_test,type = "response")
+}
+
+# Fungsi menghitung metrik LOOCV
+hitung_metrik <- function(y, pred) {
+  c(R2 = 1 - sum((y - pred)^2) /sum((y - mean(y))^2),
+    RMSE = sqrt(mean((y - pred)^2)),
+    MAE = mean(abs(y - pred)))
+}
+
+tabel_loocv_sensitivitas <- as.data.frame(
+  rbind(NBR_X4_Asli = hitung_metrik(df_model$Y, pred_asli),
+        NBR_Log_X4 = hitung_metrik(df_model$Y, pred_log))
+)
+
+tabel_loocv_sensitivitas$Model <- rownames(tabel_loocv_sensitivitas)
+
+rownames(tabel_loocv_sensitivitas) <- NULL
+
+# F6. Cook's distance kedua model
+cook_asli <- cooks.distance(model_nbr_asli)
+cook_log <- cooks.distance(model_nbr_log)
+
+batas_cook_sens <- 4 / nrow(df_model)
+
+idx_surabaya <- which(df_model$kab_kota == "Kota Surabaya")
+
+tabel_cook_sensitivitas <- data.frame(
+  Model = c("NBR X4 Asli", "NBR Log X4"),
+  Cook_Surabaya = c(cook_asli[idx_surabaya],cook_log[idx_surabaya]),
+  Batas_4_n = batas_cook_sens)
+
+tabel_cook_sensitivitas$Melebihi_Batas <- ifelse(tabel_cook_sensitivitas$Cook_Surabaya >
+                                                   tabel_cook_sensitivitas$Batas_4_n,"Ya", "Tidak")
+
+# F7. Cook's distance seluruh wilayah pada model log X4
+tabel_cook_log <- data.frame(Kabupaten = df_model$kab_kota,Cooks_Distance = as.numeric(cook_log),
+                             Batas_4_n = batas_cook_sens,Melebihi_Batas = ifelse(cook_log > batas_cook_sens,"Ya", "Tidak"))
+
+tabel_cook_log <- tabel_cook_log[order(tabel_cook_log$Cooks_Distance,decreasing = TRUE),]
+
+# G. SIMPAN SELURUH HASIL KE SATU FILE EXCEL MULTI-SHEET
 wb_02 <- createWorkbook()
 
 addWorksheet(wb_02, "Evaluasi Kebaikan Model")
@@ -500,6 +597,24 @@ writeData(wb_02, "Estimasi Baseline NB", tabel_nb0)
 
 addWorksheet(wb_02, "Estimasi NBR")
 writeData(wb_02, "Estimasi NBR", tabel_nbr)
+
+addWorksheet(wb_02, "Cook Distance NBR")
+writeData(wb_02, "Cook Distance NBR", tabel_cook)
+
+addWorksheet(wb_02, "Sensitivitas X4")
+writeData(wb_02, "Sensitivitas X4", statistik_x4)
+
+addWorksheet(wb_02, "AIC Sensitivitas X4")
+writeData(wb_02, "AIC Sensitivitas X4", tabel_aic_sensitivitas)
+
+addWorksheet(wb_02, "LOOCV Sensitivitas X4")
+writeData(wb_02, "LOOCV Sensitivitas X4",tabel_loocv_sensitivitas)
+
+addWorksheet(wb_02, "Cook Sensitivitas X4")
+writeData(wb_02, "Cook Sensitivitas X4",tabel_cook_sensitivitas)
+
+addWorksheet(wb_02, "Cook Seluruh Wilayah Log")
+writeData(wb_02, "Cook Seluruh Wilayah Log",tabel_cook_log)
 
 saveWorkbook(wb_02, file.path(folder_out_02, "02_Laporan_Poisson_vs_NBR.xlsx"), overwrite = TRUE)
 
@@ -549,6 +664,9 @@ coef_names <- c("Intercept", "X1", "X2", "X3", "X4", "X5")
 # Theta ditahan tetap pada estimasi NBR global; hanya beta yang lokal
 theta_global <- as.numeric(model_nbr$theta)
 beta_global  <- as.numeric(coef(model_nbr))
+
+dist_matrix <- as.matrix(dist(coords))
+n_obs <- nrow(df_model)
 
 stopifnot(nrow(X_mat) == length(Y_vec), length(Y_vec) == length(off_vec),
           nrow(dist_matrix) == n_obs, all(is.finite(Y_vec)),
@@ -879,6 +997,24 @@ loocv_gwnbr_bw_tetap <- function(W_cv_fun) {
   y_pred
 }
 
+# ---- Fungsi menghitung metrik evaluasi ----
+hitung_evaluasi <- function(y_aktual, y_prediksi) {
+  error <- y_aktual - y_prediksi
+  
+  SSE <- sum(error^2)
+  SST <- sum((y_aktual - mean(y_aktual))^2)
+  
+  R2 <- 1 - (SSE / SST)
+  RMSE <- sqrt(mean(error^2))
+  MAE <- mean(abs(error))
+  
+  list(
+    R2 = R2,
+    RMSE = RMSE,
+    MAE = MAE
+  )
+}
+
 metrik_loocv <- function(nama, y_pred) {
   if (!all(is.finite(y_pred))) {
     warning("Sebagian prediksi LOOCV ", nama, " tidak valid.")
@@ -933,7 +1069,6 @@ buat_label_points <- function(data) {
     slice_max(order_by = luas, n = 1, with_ties = FALSE) %>%
     ungroup() %>%
     mutate(nama_label = ifelse(grepl("^Kabupaten ", nama), sub("^Kabupaten ", "", nama), nama)) %>%
-    filter(!nama %in% kota_tanpa_label) %>%
     st_point_on_surface() %>%
     st_transform(st_crs(data))}
 
@@ -1227,10 +1362,500 @@ openxlsx::write.xlsx(
   file.path(folder_out_05, "05_Laporan_Hasil_XGBoost.xlsx"), overwrite = TRUE)
 
 # ============================================================
-# TAHAP 7: PERBANDINGAN MODEL
+# TAHAP 7: LEAVE-SURABAYA-OUT REFIT DAN EVALUASI SENSITIVITAS
 # ============================================================
-folder_out_07 <- file.path(path_folder, "07_Perbandingan")
+folder_out_07 <- file.path(path_folder, "07_Leave_Surabaya_Out")
 dir.create(folder_out_07, showWarnings = FALSE, recursive = TRUE)
+
+# A. Mengeluarkan Kota Surabaya
+idx_surabaya <- grep("Kota Surabaya",df_model$Kabupaten,ignore.case = TRUE)
+
+if (length(idx_surabaya) != 1) {
+  stop("Kota Surabaya tidak ditemukan atau terdeteksi lebih dari satu.")}
+
+df_lso <- df_model[-idx_surabaya, , drop = FALSE]
+coords_lso <- coords[-idx_surabaya, , drop = FALSE]
+
+n_lso <- nrow(df_lso)
+
+cat("Wilayah yang dikeluarkan:", df_model$Kabupaten[idx_surabaya], "\n")
+cat("Jumlah wilayah setelah Surabaya dikeluarkan:", n_lso, "\n")
+
+stopifnot(n_lso == 37,nrow(coords_lso) == n_lso)
+
+# Matriks jarak baru untuk 37 wilayah
+dist_lso <- as.matrix(dist_matrix[-idx_surabaya, -idx_surabaya])
+
+stopifnot(all(dim(dist_lso) == c(n_lso, n_lso)),all(is.finite(dist_lso)))
+
+# Respons dan offset
+Y_lso <- as.numeric(df_lso$Y)
+off_lso <- log(as.numeric(df_lso$Jumlah_Penduduk))
+
+# Formula dan matriks prediktor GWNBR
+X_lso <- as.matrix( model.matrix(~ X1 + X2 + X3 + X4 + X5, data = df_lso))
+mode(X_lso) <- "numeric"
+
+n_vars_lso <- ncol(X_lso)
+coef_names_lso <- colnames(X_lso)
+
+# Matriks prediktor XGBoost
+features <- c("X1", "X2", "X3", "X4", "X5")
+
+X_xgb_lso <- as.matrix(df_lso[, features])
+storage.mode(X_xgb_lso) <- "double"
+
+stopifnot(all(is.finite(Y_lso)),all(is.finite(off_lso)),all(is.finite(X_lso)),all(is.finite(X_xgb_lso)),all(Y_lso >= 0))
+
+# Formula NBR
+formula_nbr <- Y ~ X1 + X2 + X3 + X4 + X5 +offset(log(Jumlah_Penduduk))
+
+# B. LOOCV BASELINE NB-OFFSET DAN NBR
+pred_nb0_lso <- rep(NA_real_, n_lso)
+pred_nbr_lso <- rep(NA_real_, n_lso)
+
+for (i in seq_len(n_lso)) {
+  idx_train <- setdiff(seq_len(n_lso), i)
+  
+  # Baseline NB-offset
+  fit_nb0_i <- tryCatch(suppressWarnings(MASS::glm.nb(
+    Y ~ 1 + offset(log(Jumlah_Penduduk)),
+    data = df_lso[idx_train, , drop = FALSE])),
+    error = function(e) NULL)
+  
+  if (!is.null(fit_nb0_i)) {
+    pred_nb0_lso[i] <- as.numeric(predict(fit_nb0_i,newdata = df_lso[i, , drop = FALSE],
+                                          type = "response"))}
+  # NBR
+  fit_nbr_i <- tryCatch(
+    suppressWarnings(
+      MASS::glm.nb(formula_nbr,data = df_lso[idx_train, , drop = FALSE])),
+    error = function(e) {
+      message("Fold ", i, " gagal: ", conditionMessage(e))
+      return(NULL)})
+  
+  if (!is.null(fit_nbr_i)) {
+    pred_nbr_lso[i] <- tryCatch(
+      as.numeric(predict(fit_nbr_i,newdata = df_lso[i, , drop = FALSE],type = "response")),
+      error = function(e) NA_real_)
+  }
+}
+  if (any(!is.finite(pred_nb0_lso))) {
+    stop("Terdapat prediksi LOOCV baseline NB-offset yang tidak valid.")}
+  
+  if (any(!is.finite(pred_nbr_lso))) {
+    stop("Terdapat prediksi LOOCV NBR yang tidak valid.")}
+  
+# C. GWNBR ADAPTIVE BISQUARE
+# C1. Estimasi NBR global pada 37 wilayah
+model_nbr_lso <- MASS::glm.nb(formula_nbr,data = df_lso)
+
+theta_lso <- as.numeric(model_nbr_lso$theta)
+beta_lso_global <- as.numeric(coef(model_nbr_lso))
+
+# C2. Pemilihan bandwidth ulang menggunakan AICc
+min_k_lso <- n_vars_lso + 3
+k_range_lso <- min_k_lso:n_lso
+
+profil_aicc_lso <- data.frame(k = k_range_lso,EDF = NA_real_,K_eff = NA_real_,
+                              LogLik = NA_real_,AIC = NA_real_,AICc = NA_real_)
+
+for (j in seq_along(k_range_lso)) {
+  
+  k <- k_range_lso[j]
+  
+  hasil_ic <- hitung_ic_gwnbr(
+    W_fun = function(i) bobot_adaptif(dist_lso[i, ], k),
+    X = X_lso,
+    Y = Y_lso,
+    offset_val = off_lso,
+    theta = theta_lso,
+    beta_start = beta_lso_global
+  )
+  
+  profil_aicc_lso[j, c("EDF", "K_eff", "LogLik", "AIC", "AICc")] <-
+    unlist(hasil_ic[c("EDF", "K_eff", "LogLik", "AIC", "AICc")])
+}
+
+if (!any(is.finite(profil_aicc_lso$AICc))) {stop("Tidak ada bandwidth GWNBR yang menghasilkan AICc valid.")}
+
+idx_bw_lso <- which.min(profil_aicc_lso$AICc)
+bw_lso <- profil_aicc_lso$k[idx_bw_lso]
+
+cat("Bandwidth GWNBR tanpa Surabaya:", bw_lso, "\n")
+cat("AICc minimum:", profil_aicc_lso$AICc[idx_bw_lso], "\n")
+
+write.csv(profil_aicc_lso,file.path(folder_out_07, "Profil_AICc_GWNBR_LSO.csv"),row.names = FALSE)
+
+# C3. Fungsi LOOCV GWNBR dengan bandwidth hasil seleksi 37 wilayah
+pred_gwnbr_lso <- rep(NA_real_, n_lso)
+theta_gwnbr_fold <- rep(NA_real_, n_lso)
+
+for (i in seq_len(n_lso)) {
+  idx_train <- setdiff(seq_len(n_lso), i)
+  
+  # Estimasi ulang NBR pada 36 wilayah
+  fit_nbr_i <- tryCatch(
+    suppressWarnings(MASS::glm.nb(formula_nbr,data = df_lso[idx_train, , drop = FALSE])),
+    error = function(e) NULL)
+  
+  if (is.null(fit_nbr_i) ||
+      !is.finite(fit_nbr_i$theta) ||
+      fit_nbr_i$theta <= 0 ||
+      any(!is.finite(coef(fit_nbr_i)))) {
+    next
+  }
+  
+  theta_i <- as.numeric(fit_nbr_i$theta)
+  beta_i <- as.numeric(coef(fit_nbr_i))
+  
+  # Bobot adaptif: observasi validasi dikeluarkan dari estimasi
+  w_i <- bobot_adaptif_cv(dist_lso[i, ],i = i,k = bw_lso)
+  
+  # Estimasi koefisien lokal
+  fit_gwnbr_i <- tryCatch(
+    fit_gwnbr_local(X = X_lso,Y = Y_lso,offset_val = off_lso,theta = theta_i,
+                    W_i = w_i,beta_start = beta_i),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_gwnbr_i) || !fit_gwnbr_i$konvergen) {
+    next
+  }
+  
+  # Prediksi wilayah yang dikeluarkan
+  eta_i <- sum(X_lso[i, ] * fit_gwnbr_i$beta) + off_lso[i]
+  
+  pred_gwnbr_lso[i] <- exp(pmin(pmax(eta_i, -20), 20))
+  
+  theta_gwnbr_fold[i] <- theta_i
+}
+
+if (any(!is.finite(pred_gwnbr_lso))) {
+  stop(
+    "Terdapat prediksi LOOCV GWNBR yang tidak valid. ",
+    "Periksa konvergensi NBR dan GWNBR pada setiap fold."
+  )
+}
+
+# D. XGBOOST NESTED LOOCV PADA 37 WILAYAH
+set.seed(123)
+
+y_xgb_lso <- Y_lso
+offset_xgb_lso <- off_lso
+n_xgb_lso <- nrow(X_xgb_lso)
+
+grid_xgb_lso <- expand.grid(eta = c(0.03, 0.05, 0.10),max_depth = c(2, 3),min_child_weight = c(1, 3))
+
+buat_params_lso <- function(row) {
+  list(
+    booster = "gbtree",
+    objective = "count:poisson",
+    eval_metric = "rmse",
+    eta = as.numeric(row$eta),
+    max_depth = as.integer(row$max_depth),
+    min_child_weight = as.numeric(row$min_child_weight),
+    subsample = 0.70,
+    colsample_bytree = 0.70,
+    nthread = 1,
+    seed = 123
+  )
+}
+
+# D1. Inner LOOCV untuk tuning
+tune_internal_lso <- function(idx_train) {
+  
+  dtrain_inner <- xgb.DMatrix(data = X_xgb_lso[idx_train, , drop = FALSE],
+                              label = y_xgb_lso[idx_train],base_margin = offset_xgb_lso[idx_train])
+  
+  folds_inner <- lapply(seq_along(idx_train),function(j) j)
+  
+  hasil <- vector("list", nrow(grid_xgb_lso))
+  
+  for (g in seq_len(nrow(grid_xgb_lso))) {
+    
+    cv_g <- xgb.cv(
+      params = buat_params_lso(grid_xgb_lso[g, ]),
+      data = dtrain_inner,
+      nrounds = 1000,
+      folds = folds_inner,
+      early_stopping_rounds = 20,
+      maximize = FALSE,
+      prediction = FALSE,
+      verbose = 0
+    )
+    
+    log_cv <- cv_g$evaluation_log
+    idx_best <- which.min(log_cv$test_rmse_mean)
+    
+    hasil[[g]] <- data.frame(
+      eta = grid_xgb_lso$eta[g],
+      max_depth = grid_xgb_lso$max_depth[g],
+      min_child_weight = grid_xgb_lso$min_child_weight[g],
+      subsample = 0.70,
+      colsample_bytree = 0.70,
+      best_nrounds = idx_best,
+      inner_CV_RMSE = log_cv$test_rmse_mean[idx_best]
+    )
+  }
+  
+  hasil <- do.call(rbind, hasil)
+  hasil <- hasil[order(hasil$inner_CV_RMSE), ]
+  rownames(hasil) <- NULL
+  
+  list(best = hasil[1, , drop = FALSE],tuning_table = hasil)
+}
+
+# D2. Outer LOOCV
+pred_xgb_lso <- rep(NA_real_, n_xgb_lso)
+parameter_xgb_lso <- vector("list", n_xgb_lso)
+tuning_xgb_lso <- vector("list", n_xgb_lso)
+
+for (i in seq_len(n_xgb_lso)) {
+  
+  cat("XGBoost LSO outer fold", i, "dari", n_xgb_lso, "\n")
+  
+  idx_train <- setdiff(seq_len(n_xgb_lso), i)
+  
+  hasil_inner <- tune_internal_lso(idx_train)
+  best_i <- hasil_inner$best
+  
+  tuning_xgb_lso[[i]] <- cbind(data.frame(fold = i),hasil_inner$tuning_table)
+  
+  nrounds_i <- as.integer(best_i$best_nrounds)
+  
+  dtrain_outer <- xgb.DMatrix(data = X_xgb_lso[idx_train, , drop = FALSE],
+                              label = y_xgb_lso[idx_train],base_margin = offset_xgb_lso[idx_train])
+  
+  dtest_outer <- xgb.DMatrix(data = X_xgb_lso[i, , drop = FALSE],base_margin = offset_xgb_lso[i])
+  
+  model_i <- xgb.train(params = buat_params_lso(best_i),data = dtrain_outer,
+                       nrounds = nrounds_i,verbose = 0)
+  
+  pred_xgb_lso[i] <- as.numeric(predict(model_i, dtest_outer))
+  
+  parameter_xgb_lso[[i]] <- data.frame(
+    fold = i,
+    eta = best_i$eta,
+    max_depth = best_i$max_depth,
+    min_child_weight = best_i$min_child_weight,
+    subsample = best_i$subsample,
+    colsample_bytree = best_i$colsample_bytree,
+    nrounds = nrounds_i,
+    inner_CV_RMSE = best_i$inner_CV_RMSE
+  )
+}
+
+if (any(!is.finite(pred_xgb_lso))) {stop("Terdapat prediksi nested LOOCV XGBoost yang tidak valid.")}
+
+# E. EVALUASI LOOCV KEEMPAT MODEL PADA 37 WILAYAH
+pred_list_lso <- list("Baseline NB-offset" = pred_nb0_lso,"NBR" = pred_nbr_lso,
+                      "GWNBR Adaptive Bisquare" = pred_gwnbr_lso,"XGBoost" = pred_xgb_lso)
+
+hitung_evaluasi_lso <- function(y, pred) {
+  
+  if (length(y) != length(pred) || any(!is.finite(pred))) {
+    stop("Panjang data tidak sesuai atau terdapat prediksi tidak valid.")
+  }
+  
+  SSE <- sum((y - pred)^2)
+  SST <- sum((y - mean(y))^2)
+  
+  data.frame(R2 = 1 - SSE / SST,RMSE = sqrt(mean((y - pred)^2)),MAE = mean(abs(y - pred)))
+}
+
+hasil_evaluasi_lso <- do.call(
+  rbind,lapply(names(pred_list_lso), function(nm) {
+    
+    e <- hitung_evaluasi_lso(Y_lso,pred_list_lso[[nm]])
+    
+    data.frame(Model = nm,N = n_lso,R2_LOOCV = e$R2,RMSE_LOOCV = e$RMSE,MAE_LOOCV = e$MAE)
+  })
+)
+
+rownames(hasil_evaluasi_lso) <- NULL
+
+# F. MODEL FINAL XGBOOST PADA 37 WILAYAH
+hasil_tuning_final_lso <- tune_internal_lso(seq_len(n_xgb_lso))
+
+best_final_lso <- hasil_tuning_final_lso$best
+nrounds_final_lso <- as.integer(best_final_lso$best_nrounds)
+
+dtrain_final_lso <- xgb.DMatrix(data = X_xgb_lso,label = y_xgb_lso,base_margin = offset_xgb_lso)
+
+params_final_lso <- buat_params_lso(best_final_lso)
+params_final_lso$seed <- NULL
+
+set.seed(123)
+
+xgb_final_lso <- xgb.train(params = params_final_lso,data = dtrain_final_lso,
+                           nrounds = nrounds_final_lso,verbose = 0)
+
+# Prediksi in-sample model final (bukan metrik LOOCV)
+pred_xgb_final_lso <- as.numeric(predict(xgb_final_lso, dtrain_final_lso))
+
+# G. ESTIMASI AKHIR GWNBR PADA 37 WILAYAH
+beta_gwnbr_lso <- matrix(NA_real_,nrow = n_lso,ncol = n_vars_lso)
+
+se_gwnbr_lso <- matrix(NA_real_,nrow = n_lso,ncol = n_vars_lso)
+
+pred_gwnbr_fit_lso <- rep(NA_real_, n_lso)
+fit_gwnbr_lso_simpan <- vector("list", n_lso)
+
+for (i in seq_len(n_lso)) {
+  
+  w_i <- bobot_adaptif(dist_lso[i, ], bw_lso)
+  
+  fit_i <- tryCatch(
+    fit_gwnbr_local(X = X_lso,Y = Y_lso,offset_val = off_lso,theta = theta_lso,
+                    W_i = w_i,beta_start = beta_lso_global),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_i) || !fit_i$konvergen) next
+  
+  fit_gwnbr_lso_simpan[[i]] <- fit_i
+  beta_gwnbr_lso[i, ] <- fit_i$beta
+  se_gwnbr_lso[i, ] <- fit_i$se
+  pred_gwnbr_fit_lso[i] <- fit_i$y_hat[i]
+}
+
+if (any(!is.finite(pred_gwnbr_fit_lso))) {stop("Terdapat estimasi GWNBR akhir yang tidak konvergen.")}
+
+colnames(beta_gwnbr_lso) <- paste0("Beta_", coef_names_lso)
+colnames(se_gwnbr_lso) <- paste0("SE_", coef_names_lso)
+
+hasil_koef_gwnbr_lso <- data.frame(
+  Kabupaten = df_lso$Kabupaten,
+  as.data.frame(beta_gwnbr_lso),
+  as.data.frame(se_gwnbr_lso),
+  Y_Aktual = Y_lso,
+  Y_Prediksi = pred_gwnbr_fit_lso
+)
+
+# H. REKAP PARAMETER MODEL GLOBAL
+# Model Baseline NB-offset pada 37 wilayah (tanpa Surabaya)
+model_nb0_no_sby <- MASS::glm.nb(Y ~ 1 + offset(log(Jumlah_Penduduk)),data = df_lso)
+
+hasil_parameter_global_lso <- data.frame(
+  Model = c("Baseline NB-offset", "NBR"),
+  Theta = c(model_nb0_no_sby$theta,model_nbr_lso$theta),
+  AIC = c(AIC(model_nb0_no_sby),AIC(model_nbr_lso))
+)
+
+# I. TABEL PREDIKSI LOOCV
+hasil_prediksi_lso <- data.frame(
+  Kabupaten = df_lso$Kabupaten,
+  Y_Aktual = Y_lso,
+  Baseline_NB_offset = pred_nb0_lso,
+  NBR = pred_nbr_lso,
+  GWNBR_Adaptive_Bisquare = pred_gwnbr_lso,
+  XGBoost = pred_xgb_lso
+)
+
+# PERBANDINGAN PARAMETER SEBELUM DAN SESUDAH SURABAYA DIKELUARKAN
+# 1. PERBANDINGAN PARAMETER NBR
+parameter_nbr_38 <- coef(model_nbr)
+parameter_nbr_37 <- coef(model_nbr_lso)
+
+hasil_perbandingan_nbr <- data.frame(
+  Parameter = names(parameter_nbr_38),
+  NBR_38_Wilayah = as.numeric(parameter_nbr_38),
+  NBR_37_Wilayah = as.numeric(parameter_nbr_37))
+
+# Tambahkan parameter dispersi (Theta)
+hasil_perbandingan_nbr <- rbind(
+  hasil_perbandingan_nbr,
+  data.frame(Parameter = "Theta",NBR_38_Wilayah = model_nbr$theta,NBR_37_Wilayah = model_nbr_lso$theta))
+
+# Hitung perubahan parameter NBR
+hasil_perbandingan_nbr$Perubahan <-
+  hasil_perbandingan_nbr$NBR_37_Wilayah -
+  hasil_perbandingan_nbr$NBR_38_Wilayah
+
+# 2. PERBANDINGAN KOEFISIEN LOKAL GWNBR
+hasil_38 <- hasil_gwnbr
+hasil_37 <- hasil_koef_gwnbr_lso
+
+# Samakan nama kolom intercept
+names(hasil_37)[
+  names(hasil_37) == "Beta_.Intercept."
+] <- "Beta_Intercept"
+
+# Ambil kolom kabupaten dan koefisien
+koef_38 <- hasil_38[, c("Kabupaten", "Beta_Intercept","Beta_X1", "Beta_X2", "Beta_X3","Beta_X4", "Beta_X5")]
+koef_37 <- hasil_37[, c("Kabupaten", "Beta_Intercept","Beta_X1", "Beta_X2", "Beta_X3","Beta_X4", "Beta_X5")]
+
+# Cocokkan berdasarkan nama kabupaten/kota
+perbandingan_gwnbr <- merge(koef_38,koef_37,by = "Kabupaten",suffixes = c("_38", "_37"))
+
+# Pastikan terdapat 37 wilayah yang sama
+stopifnot(nrow(perbandingan_gwnbr) == 37)
+
+# Nama parameter koefisien
+variabel_beta <- c("Beta_Intercept", "Beta_X1", "Beta_X2","Beta_X3", "Beta_X4", "Beta_X5")
+
+# Hitung perubahan koefisien setiap wilayah
+for (v in variabel_beta) {
+  perbandingan_gwnbr[[paste0(v, "_Perubahan")]] <-
+    perbandingan_gwnbr[[paste0(v, "_37")]] -
+    perbandingan_gwnbr[[paste0(v, "_38")]]
+}
+
+# 3. RINGKASAN PERUBAHAN KOEFISIEN GWNBR
+ringkasan_gwnbr <- data.frame(
+  Variabel = variabel_beta,
+  
+  Rata_rata_38 = sapply(variabel_beta, function(v) {
+    mean(perbandingan_gwnbr[[paste0(v, "_38")]],na.rm = TRUE)}),
+  
+  Rata_rata_37 = sapply(variabel_beta, function(v) {
+    mean(perbandingan_gwnbr[[paste0(v, "_37")]],na.rm = TRUE)}),
+  
+  Rata_rata_Perubahan = sapply(variabel_beta, function(v) {
+    mean(perbandingan_gwnbr[[paste0(v, "_Perubahan")]],na.rm = TRUE)}),
+  
+  Jumlah_Berubah_Tanda = sapply(variabel_beta, function(v) {
+    a <- perbandingan_gwnbr[[paste0(v, "_38")]]
+    b <- perbandingan_gwnbr[[paste0(v, "_37")]]
+    
+    sum(a * b < 0, na.rm = TRUE)})
+)
+
+# 4. IDENTIFIKASI WILAYAH YANG BERUBAH TANDA KOEFISIEN
+# Perubahan tanda koefisien X3
+perubahan_tanda_X3 <- subset(perbandingan_gwnbr,Beta_X3_38 * Beta_X3_37 < 0,
+  select = c(Kabupaten,Beta_X3_38,Beta_X3_37,Beta_X3_Perubahan))
+
+# Perubahan tanda koefisien X5
+perubahan_tanda_X5 <- subset(perbandingan_gwnbr,Beta_X5_38 * Beta_X5_37 < 0,
+  select = c(Kabupaten,Beta_X5_38,Beta_X5_37,Beta_X5_Perubahan))
+
+# 5. SIMPAN SELURUH HASIL KE EXCEL
+openxlsx::write.xlsx(
+  list(
+    Evaluasi_LOOCV = hasil_evaluasi_lso,
+    Prediksi_LOOCV = hasil_prediksi_lso,
+    Koefisien_Lokal_GWNBR = hasil_koef_gwnbr_lso,
+    Parameter_Global = hasil_parameter_global_lso,
+    Parameter_Nested_XGB = do.call(rbind, parameter_xgb_lso),
+    Tuning_Nested_XGB = do.call(rbind, tuning_xgb_lso),
+    Tuning_Final_XGB = hasil_tuning_final_lso$tuning_table,
+    Perbandingan_Parameter_NBR = hasil_perbandingan_nbr,
+    Perbandingan_Koefisien_GWNBR = perbandingan_gwnbr,
+    Ringkasan_Perubahan_GWNBR = ringkasan_gwnbr,
+    Perubahan_Tanda_X3 = perubahan_tanda_X3,
+    Perubahan_Tanda_X5 = perubahan_tanda_X5),
+  
+  file.path(folder_out_07,"07_Seluruh_Hasil_LOSO_37_Wilayah.xlsx"),
+  overwrite = TRUE
+)
+
+# ============================================================
+# TAHAP 8: PERBANDINGAN MODEL
+# ============================================================
+folder_out_08 <- file.path(path_folder, "08_Perbandingan")
+dir.create(folder_out_08, showWarnings = FALSE, recursive = TRUE)
 
 n_loo <- nrow(df_model)
 y_aktual <- as.numeric(df_model$Y)
@@ -1249,6 +1874,64 @@ for (i in seq_len(n_loo)) {
   fit_nbr <- MASS::glm.nb(formula_nbr, data = df_model[-i, ])
   y_pred_nbr_loo[i] <- predict(fit_nbr, newdata = df_model[i, ], type = "response")}
 
+# Fungsi prediksi satu fold LOOCV GWNBR
+cv_gwnbr_predict_one <- function(i, data, coords) {
+  
+  idx_train <- setdiff(seq_len(nrow(data)), i)
+  
+  # Estimasi NBR pada data training
+  fit_global_i <- tryCatch(
+    suppressWarnings(
+      MASS::glm.nb(
+        formula_nbr,
+        data = data[idx_train, , drop = FALSE]
+      )
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_global_i)) {
+    return(NA_real_)
+  }
+  
+  theta_i <- fit_global_i$theta
+  beta_i <- as.numeric(coef(fit_global_i))
+  
+  # Matriks desain dan data respons
+  X_i <- as.matrix(model.matrix(~ X1 + X2 + X3 + X4 + X5,data = data))
+  
+  Y_i <- as.numeric(data$Y)
+  off_i <- log(as.numeric(data$Jumlah_Penduduk))
+  
+  # Jarak antarwilayah
+  dists_i <- as.matrix(dist(coords))[i, ]
+  
+  # Bobot adaptive bisquare dengan bandwidth tetap
+  W_i <- bobot_adaptif_cv(dists_i, i, bw_opt)
+  
+  # Estimasi GWNBR lokal
+  fit_local_i <- tryCatch(
+    fit_gwnbr_local(
+      X = X_i,
+      Y = Y_i,
+      offset_val = off_i,
+      theta = theta_i,
+      W_i = W_i,
+      beta_start = beta_i
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_local_i) || !fit_local_i$konvergen) {
+    return(NA_real_)
+  }
+  
+  # Prediksi wilayah yang ditinggalkan
+  eta_i <- sum(X_i[i, ] * fit_local_i$beta) + off_i[i]
+  
+  exp(pmin(pmax(eta_i, -20), 20))
+}
+
 # 2. LOOCV GWNBR (Menggunakan fungsi helper agar loop bersih)
 y_pred_gwnbr_loo <- sapply(seq_len(n_loo), function(i) cv_gwnbr_predict_one(i, df_model, coords))
 
@@ -1256,7 +1939,7 @@ y_pred_gwnbr_loo <- sapply(seq_len(n_loo), function(i) cv_gwnbr_predict_one(i, d
 pred_list <- list(
   "Baseline NB-offset" = pred_nb0_loo,
   "NBR"                = y_pred_nbr_loo,
-  "GWNBR"              = y_pred_ad,
+  "GWNBR"              = y_pred_gwnbr_loo,
   "XGBoost"            = as.numeric(pred_outer))
 
 rate_actual <- y_aktual / pop * 100000
@@ -1273,19 +1956,34 @@ tabel9 <- do.call(rbind, lapply(names(pred_list), function(nm) {
     RMSE_rate_100k = round(sqrt(mean((rate_actual - r)^2)), 2),
     MAE_rate_100k  = round(mean(abs(rate_actual - r)), 2))}))
 
-# 4. KEEPOUT SENSITIVITAS (SURABAYA)
-idx_surabaya <- grep("Kota Surabaya", df_model$Kabupaten, ignore.case = TRUE)
-keep <- setdiff(seq_len(n_loo), idx_surabaya)
+# Menghitung kesalahan absolut setiap model
+err_baseline <- abs(y_aktual - pred_nb0_loo)
+err_nbr      <- abs(y_aktual - y_pred_nbr_loo)
+err_gwnbr    <- abs(y_aktual - y_pred_gwnbr_loo)
+err_xgb      <- abs(y_aktual - as.numeric(pred_outer))
 
-sensitivity_results <- do.call(rbind, lapply(names(pred_list), function(nm) {
-  p <- pred_list[[nm]]
-  data.frame(
-    Model = c(nm, nm),
-    Evaluasi = c("Semua wilayah", "Tanpa Surabaya"),
-    RMSE = c(round(sqrt(mean((y_aktual - p)^2)), 2), 
-             round(sqrt(mean((y_aktual[keep] - p[keep])^2)), 2)),
-    MAE = c(round(mean(abs(y_aktual - p)), 2), 
-            round(mean(abs(y_aktual[keep] - p[keep])), 2)))}))
+# Menggabungkan kesalahan absolut
+errors <- data.frame(Wilayah = df_model$Kabupaten,Y_Aktual = y_aktual,Baseline_NB_offset = err_baseline,
+                     NBR = err_nbr,GWNBR = err_gwnbr,XGBoost = err_xgb)
+
+print(errors)
+# Uji Wilcoxon berpasangan
+kolom_model <- c("Baseline_NB_offset","NBR","GWNBR","XGBoost")
+
+pairs <- combn(kolom_model, 2, simplify = FALSE)
+
+hasil_wilcoxon <- do.call(rbind, lapply(pairs, function(p) {
+  
+  test <- wilcox.test(errors[[p[1]]],errors[[p[2]]],paired = TRUE,exact = FALSE)
+  
+  data.frame(Model_1 = p[1],Model_2 = p[2],W = unname(test$statistic),p_value = test$p.value)
+}))
+
+print(hasil_wilcoxon)
+
+hasil_wilcoxon$p_adjusted <- p.adjust(hasil_wilcoxon$p_value,method = "holm")
+
+print(hasil_wilcoxon)
 
 # 5. AKOMODASI TABEL RESIDUAL & AIC/AICc
 df_01_match <- data.frame(Kabupaten = df_model$Kabupaten, Y_Aktual = y_aktual, as.data.frame(pred_list))
@@ -1299,18 +1997,8 @@ df_06_aicc <- tibble(
   AIC = round(c(ic_nb0$AIC, ic_nbr$AIC, aic_gwnbr), 3),
   AICc = round(c(ic_nb0$AICc, ic_nbr$AICc, aicc_gwnbr), 3))
 
-# 6. PLOTTING & EXPORT AUTOMATION
-for (m in c("R2", "RMSE", "MAE")) {
-  p <- ggplot(tabel9, aes(x = factor(Model, levels = names(pred_list)), y = .data[[m]])) +
-    geom_col(width = 0.5, fill = "steelblue") +
-    geom_text(aes(label = .data[[m]]), vjust = -0.5, fontface = "bold") +
-    theme_minimal() + 
-    labs(title = paste("Kinerja Model:", m), x = "Model", y = m)
-  
-  ggsave(file.path(folder_out_07, paste0("Perbandingan_", m, ".png")), p, width = 7, height = 4.5, dpi = 300, bg = "white")
-  }
-
 # Ekspor Excel
 list_sheets <- list("Tabel Perbandingan" = tabel9, "Match Prediksi" = df_01_match, 
-                    "AIC AICc" = df_06_aicc, "Sensitivitas Surabaya" = sensitivity_results)
-writexl::write_xlsx(list_sheets, file.path(folder_out_07, "07_Laporan_Perbandingan_4_Model.xlsx"))
+                    "AIC AICc" = df_06_aicc, "hasil wilcoxon" = hasil_wilcoxon)
+writexl::write_xlsx(list_sheets, file.path(folder_out_08, "08_Laporan_Perbandingan_4_Model.xlsx"))
+
