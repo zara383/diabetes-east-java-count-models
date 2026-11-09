@@ -647,7 +647,7 @@ writeData(wb_03, "Morans_I_Residual_NBR", tabel_moran)
 saveWorkbook(wb_03, file.path(folder_out_03, "03_Hasil_Moran.xlsx"), overwrite = TRUE)
 
 # ============================================================
-# TAHAP 4: GWNBR (adaptive bisquare utama, fixed Gaussian alternatif)
+# TAHAP 4: GWNBR
 # ============================================================
 folder_out_04 <- file.path(path_folder, "04_GWNBR")
 folder_peta_c <- file.path(folder_out_04, "Peta_Koefisien_GWNBR")
@@ -873,28 +873,23 @@ df_04_lengkap$Y_Aktual   <- Y_vec
 df_04_lengkap$Y_Prediksi <- y_hat_gwnbr
 df_04_lengkap$Residual   <- Y_vec - y_hat_gwnbr
 
-# ---- G2. Koreksi pengujian ganda (aproksimasi Byrne) ----
-S_hat <- matrix(0, nrow = n_obs, ncol = n_obs)
-for (i in seq_len(n_obs)) {
-  fit_i <- fit_simpan[[i]]
-  x_i   <- matrix(as.numeric(X_mat[i, ]), nrow = 1)
-  S_hat[i, ] <- as.numeric(x_i %*% fit_i$inv_hessian %*% t(X_mat)) * fit_i$w_diag
-}
-stopifnot(all(dim(S_hat) == c(n_obs, n_obs)), all(is.finite(S_hat)))
-
-tr_S         <- sum(diag(S_hat))
-tr_StS       <- sum(S_hat^2)
-p_eff_byrne  <- 2 * tr_S - tr_StS
-m_tests      <- n_obs * n_vars
+# ---- Koreksi pengujian berganda da Silva dan Fotheringham (2016) ----
 alpha_family <- 0.05
-if (!is.finite(p_eff_byrne) || p_eff_byrne <= 0 || p_eff_byrne > m_tests)
-  stop("Effective number of parameters tidak valid; periksa S_hat.")
-alpha_byrne <- alpha_family / (1 + p_eff_byrne - p_eff_byrne / m_tests)
+ENP <- 2 * tr_S - tr_StS
+p_local <- 6
 
+alpha_ds <- (alpha_family * p_local) / ENP
 tabel_koreksi <- data.frame(
-  Indikator = c("tr(S)", "tr(S'S)", "Effective parameters (2tr(S) - tr(S'S))",
-                "Jumlah pengujian (n x p)", "Alpha terkoreksi"),
-  Nilai = c(tr_S, tr_StS, p_eff_byrne, m_tests, alpha_byrne))
+  Indikator = c(
+    "tr(S)",
+    "tr(S'S)",
+    "Effective number of parameters (ENP)",
+    "Jumlah parameter lokal (p)",
+    "Alpha awal",
+    "Alpha terkoreksi da Silva dan Fotheringham"
+  ),
+  Nilai = c(tr_S,tr_StS,ENP,p_local,alpha_family,alpha_ds)
+)
 
 # ---- H. Ringkasan deskriptif parameter lokal ----
 summary_list <- list()
