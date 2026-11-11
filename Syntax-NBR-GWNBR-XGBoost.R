@@ -251,22 +251,27 @@ batas_atas  <- ceiling(nilai_maks / 500) * 500
 breaks_rate <- seq(0, batas_atas, by = 500)
 n_kelas     <- length(breaks_rate) - 1
 
-# 7. Membuat peta choropleth
 peta_y <- ggplot() +
+  # 1. Peta Utama
   geom_sf(
     data = geo_data,
     aes(fill = rate_dm),
-    color = "grey25",
-    linewidth = 0.45) +
+    color = "grey20", 
+    linewidth = 0.3
+  ) +
   
+  # 2. Label teks langsung (tanpa titik)
   geom_text(
     data = label_points,
     aes(x = lon, y = lat, label = nama_label),
     color = "black",
     fontface = "bold",
-    size = 2.0,
-    check_overlap = TRUE) +
+    size = 3.2, # Sedikit diperbesar agar nama lebih terbaca
+    check_overlap = TRUE
+    # nudge_x dan hjust dihapus agar teks pas di tengah koordinat
+  ) +
   
+  # 3. Skala warna Viridis
   scale_fill_stepsn(
     colors = viridisLite::viridis(n_kelas),
     breaks = breaks_rate,
@@ -274,45 +279,76 @@ peta_y <- ggplot() +
     name = "Rate per 100,000",
     labels = scales::comma,
     na.value = "grey85",
-    guide = guide_colorsteps(show.limits = TRUE, even.steps = TRUE)) +
+    guide = guide_colorsteps(
+      show.limits = TRUE,
+      even.steps = TRUE,
+      frame.colour = "black", 
+      ticks.colour = "black"
+    )
+  ) +
   
+  # 4. Kompas (North Arrow) yang lebih besar dan jelas
   annotation_north_arrow(
-    location = "tr",
+    location = "tr", # Kanan atas
     which_north = "true",
-    style = north_arrow_fancy_orienteering,
-    height = grid::unit(0.9, "cm"),
-    width = grid::unit(0.9, "cm")) +
+    style = north_arrow_fancy_orienteering( # Menggunakan gaya yang lebih tebal
+      text_size = 12,
+      line_width = 1.2
+    ),
+    height = grid::unit(1.8, "cm"), # Diperbesar dari 1.2cm ke 1.8cm
+    width = grid::unit(1.8, "cm"),  # Diperbesar dari 0.8cm ke 1.8cm
+    pad_x = unit(0.5, "cm"),        # Diberi jarak sedikit dari ujung frame
+    pad_y = unit(0.5, "cm")
+  ) +
   
+  # 5. Skala jarak
   annotation_scale(
-    location = "bl",
-    width_hint = 0.25,
-    text_cex = 0.7,
-    line_width = 0.6,
-    unit_category = "metric") +
+    location = "br", # Kanan bawah
+    width_hint = 0.2,
+    line_width = 1,
+    text_cex = 0.8,
+    style = "ticks" 
+  ) +
   
-  labs(x = "Longitude", y = "Latitude") +
+  coord_sf(
+    xlim = c(110.8, 116.1), # Membatasi garis bujur (kiri-kanan)
+    ylim = c(-8.9, -6.3),   # Membatasi garis lintang (bawah-atas)
+    expand = FALSE) +
   
-  # Peta memenuhi panel (tanpa ruang kosong di tepi)
-  coord_sf(expand = FALSE) +
+  labs(x = NULL, y = NULL) +
+  
+  # 6. Tema 
   theme_minimal() +
   theme(
-    aspect.ratio = 5/7,    # tinggi : lebar panel peta = 5 : 7
-    legend.position = "right",
-    axis.title = element_text(size = 10),
-    axis.text = element_text(size = 8),
-    panel.grid.major = element_line(color = "grey90", linetype = "dashed", linewidth = 0.1),
+    panel.background = element_rect(fill = "#F4F7F9", color = "black", linewidth = 0.8),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.grid.major = element_line(color = "white", linewidth = 0.5),
     panel.grid.minor = element_blank(),
-    plot.background  = element_rect(fill = "white", color = NA),
-    panel.background = element_rect(fill = "white", color = NA)
+    
+    legend.position = c(0.02, 0.98),
+    legend.justification = c(0, 1),
+    legend.background = element_rect(fill = alpha("white", 0.9), color = "grey70"),
+    legend.margin = margin(5, 5, 5, 5),
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9),
+    
+    axis.text = element_text(size = 8, color = "black"),
+    axis.ticks = element_line(color = "black"),
+    axis.ticks.length = unit(0.15, "cm")
   )
+
 # 10. Menyimpan gambar
 ggsave(
-  filename = file.path(folder_out_01, "03_Choropleth_Map_Diabetes_Mellitus_Rate.png"),
+  filename = file.path(
+    folder_out_01,
+    "03_Choropleth_Map_Diabetes_Mellitus_Rate.png"
+  ),
   plot = peta_y,
   width = 12,
   height = 7,
   dpi = 300,
-  bg = "white")
+  bg = "white"
+)
 
 # ============================================================
 # TAHAP 2: POISSON vs NBR (+ BASELINE NB-OFFSET)
@@ -647,387 +683,1279 @@ writeData(wb_03, "Morans_I_Residual_NBR", tabel_moran)
 saveWorkbook(wb_03, file.path(folder_out_03, "03_Hasil_Moran.xlsx"), overwrite = TRUE)
 
 # ============================================================
-# TAHAP 4: GWNBR
+# TAHAP 4: GWNBR (Adaptive Bisquare dan Fixed Gaussian)
 # ============================================================
 folder_out_04 <- file.path(path_folder, "04_GWNBR")
 folder_peta_c <- file.path(folder_out_04, "Peta_Koefisien_GWNBR")
-folder_peta_s <- file.path(folder_out_04, "Peta_Signifikansi_GWNBR")
 
-# ---- B. Persiapan data ----
+dir.create(folder_out_04, recursive = TRUE, showWarnings = FALSE)
+dir.create(folder_peta_c, recursive = TRUE, showWarnings = FALSE)
+
+# ---- B. PERSIAPAN DATA ----
 X_mat <- as.matrix(model.matrix(~ X1 + X2 + X3 + X4 + X5, data = df_model))
 mode(X_mat) <- "numeric"
-Y_vec   <- as.numeric(df_model$Y)
+
+Y_vec <- as.numeric(df_model$Y)
 off_vec <- log(as.numeric(df_model$Jumlah_Penduduk))
-n_vars  <- ncol(X_mat)
-coef_names <- c("Intercept", "X1", "X2", "X3", "X4", "X5")
 
-# Theta ditahan tetap pada estimasi NBR global; hanya beta yang lokal
-theta_global <- as.numeric(model_nbr$theta)
-beta_global  <- as.numeric(coef(model_nbr))
-
-dist_matrix <- as.matrix(dist(coords))
+n_vars <- ncol(X_mat)
 n_obs <- nrow(df_model)
 
-stopifnot(nrow(X_mat) == length(Y_vec), length(Y_vec) == length(off_vec),
-          nrow(dist_matrix) == n_obs, all(is.finite(Y_vec)),
-          all(is.finite(off_vec)), all(is.finite(dist_matrix)))
-cat("Theta global NBR:", theta_global, "| n:", n_obs, "| koefisien lokal:", n_vars, "\n")
+coef_names <- c("Intercept", "X1", "X2", "X3", "X4", "X5")
 
-# ---- C. Fungsi dasar ----
-# C1. Bobot adaptive bisquare (k = jumlah tetangga selain lokasi itu sendiri)
+# Theta tetap menggunakan estimasi NBR global,
+# sedangkan koefisien beta diestimasi secara lokal.
+theta_global <- as.numeric(model_nbr$theta)
+beta_global <- as.numeric(coef(model_nbr))
+
+dist_matrix <- as.matrix(dist(coords))
+
+# Pemeriksaan kesesuaian data
+stopifnot(
+  nrow(X_mat) == length(Y_vec),
+  length(Y_vec) == length(off_vec),
+  nrow(dist_matrix) == n_obs,
+  ncol(dist_matrix) == n_obs,
+  n_vars == length(coef_names),
+  all(is.finite(X_mat)),
+  all(is.finite(Y_vec)),
+  all(is.finite(off_vec)),
+  all(is.finite(dist_matrix)),
+  all(Y_vec >= 0),
+  all(off_vec > -Inf),
+  is.finite(theta_global),
+  theta_global > 0,
+  length(beta_global) == n_vars
+)
+
+# ---- C. FUNGSI DASAR ----
+# C1. Bobot Adaptive Bisquare untuk data lengkap
 bobot_adaptif <- function(dists, k) {
-  n <- length(dists)
-  if (k < 1 || k > n) stop("Nilai k tidak valid.")
-  h <- if (k == n) max(dists) else sort(dists)[k + 1]
-  if (!is.finite(h) || h <= 0) stop("Bandwidth adaptive tidak valid.")
-  ifelse(dists <= h, (1 - (dists / h)^2)^2, 0)}
+  if (length(dists) < 2 ||
+      any(!is.finite(dists)) ||
+      any(dists < 0)) {
+    stop("Matriks jarak tidak valid.")
+  }
+  if (length(k) != 1 || k != as.integer(k) ||
+      k < 1 || k >= length(dists)) {
+    stop("Nilai k tidak valid.")
+  }
+  h <- sort(dists)[k + 1]
+  if (!is.finite(h) || h <= 0) {
+    stop("Bandwidth adaptive tidak valid.")
+  }
+  w <- ifelse(dists <= h,(1 - (dists / h)^2)^2,0)
+  as.numeric(w)
+}
 
-# C2. Bobot adaptive untuk LOOCV (observasi i dikeluarkan)
-bobot_adaptif_cv <- function(dists, i, k) {
-  d_train <- dists[-i]
-  n_train <- length(d_train)
-  if (k < 1 || k > n_train) stop("Bandwidth LOOCV tidak valid.")
-  h <- if (k == n_train) max(d_train) else sort(d_train)[k]
-  if (!is.finite(h) || h <= 0) stop("Bandwidth LOOCV tidak valid.")
-  w <- ifelse(dists <= h, (1 - (dists / h)^2)^2, 0)
-  w[i] <- 0
-  w}
-
-# C3. Bobot fixed Gaussian (h dalam meter)
+# C2. Bobot Fixed Gaussian
+# Bandwidth h menggunakan satuan meter.
 bobot_fixed_gaussian <- function(dists, h) {
-  if (!is.finite(h) || h <= 0) stop("Bandwidth fixed tidak valid.")
-  exp(-0.5 * (dists / h)^2)}
+  if (length(h) != 1 || !is.finite(h) || h <= 0) {
+    stop("Bandwidth fixed tidak valid.")
+  }
+  
+  if (any(!is.finite(dists)) || any(dists < 0)) {
+    stop("Matriks jarak tidak valid.")
+  }
+  
+  exp(-0.5 * (dists / h)^2)
+}
 
-# C4. Estimasi lokal GWNBR (Fisher scoring, link log, theta tetap)
+# C3. Estimasi parameter lokal GWNBR
 fit_gwnbr_local <- function(X, Y, offset_val, theta, W_i, beta_start,
                             max_iter = 100, tol = 1e-5) {
-  p     <- ncol(X)
-  ridge <- diag(1e-6, p)
-  beta  <- as.numeric(beta_start)
   
+  p <- ncol(X)
+  n <- nrow(X)
+  
+  if (length(Y) != n ||
+      length(offset_val) != n ||
+      length(W_i) != n ||
+      length(beta_start) != p) {
+    stop("Dimensi data tidak sesuai.")
+  }
+  
+  if (!is.finite(theta) || theta <= 0 ||
+      any(!is.finite(W_i)) ||
+      any(W_i < 0)) {
+    stop("Theta atau bobot tidak valid.")
+  }
+  
+  beta <- as.numeric(beta_start)
+  ridge <- diag(1e-6, p)
+  
+  # Komponen Fisher Scoring
   komponen <- function(b) {
-    eta    <- pmin(pmax(as.vector(X %*% b + offset_val), -20), 20)
-    mu     <- exp(eta)
-    var_y  <- mu + mu^2 / theta
+    
+    eta <- pmin(
+      pmax(as.vector(X %*% b + offset_val), -20),
+      20
+    )
+    
+    mu <- exp(eta)
+    var_y <- mu + mu^2 / theta
     w_diag <- as.numeric(W_i * mu^2 / var_y)
-    list(w_diag  = w_diag,
-         score   = t(X) %*% (W_i * (Y - mu) * mu / var_y),
-         hessian = t(X) %*% (X * w_diag))}
+  
+    list(w_diag = w_diag,score = t(X) %*% (W_i * (Y - mu) * mu / var_y),
+      hessian = t(X) %*% (X * w_diag)
+    )
+  }
   
   konvergen <- FALSE
   for (iter in seq_len(max_iter)) {
+    
     k <- komponen(beta)
+    
     langkah <- tryCatch(
       as.vector(solve(k$hessian + ridge, k$score)),
-      error = function(e) as.vector(MASS::ginv(k$hessian + ridge) %*% k$score))
+      error = function(e) {as.vector(MASS::ginv(k$hessian + ridge) %*% k$score)
+      }
+    )
+    
     beta_new <- beta + langkah
-    selisih  <- max(abs(beta_new - beta), na.rm = TRUE)
+    selisih <- max(abs(beta_new - beta), na.rm = TRUE)
+    
     if (!is.finite(selisih)) break
+    
     beta <- beta_new
-    if (selisih < tol) { konvergen <- TRUE; break }}
+    
+    if (selisih < tol) {
+      konvergen <- TRUE
+      break
+    }
+  }
   
+  # Menghitung kembali komponen pada beta akhir
   k <- komponen(beta)
-  inv_hessian <- tryCatch(solve(k$hessian + ridge),
-                          error = function(e) MASS::ginv(k$hessian + ridge))
-  inv_hessian <- matrix(as.numeric(inv_hessian), nrow = p, ncol = p)
-  se    <- sqrt(pmax(diag(inv_hessian), 1e-8))
-  y_hat <- exp(pmin(pmax(as.vector(X %*% beta + offset_val), -20), 20))
+  inv_hessian <- tryCatch(
+    solve(k$hessian + ridge),
+    error = function(e) {
+      MASS::ginv(k$hessian + ridge)
+    }
+  )
   
-  list(beta = beta, se = se, y_hat = y_hat, inv_hessian = inv_hessian,
-       w_diag = k$w_diag, konvergen = konvergen)}
+  inv_hessian <- matrix(
+    as.numeric(inv_hessian),
+    nrow = p,
+    ncol = p
+  )
+  
+  se <- sqrt(pmax(diag(inv_hessian), 1e-8))
+  
+  eta <- pmin(
+    pmax(as.vector(X %*% beta + offset_val), -20),
+    20
+  )
+  
+  y_hat <- exp(eta)
+  
+  list(
+    beta = beta,
+    se = se,
+    y_hat = y_hat,
+    inv_hessian = inv_hessian,
+    w_diag = k$w_diag,
+    konvergen = konvergen
+  )
+}
 
-# C5. Elemen diagonal matriks hat S_ii
-hitung_S_ii <- function(fit, i) {
-  x_i <- matrix(as.numeric(X_mat[i, ]), nrow = 1)
-  as.numeric(x_i %*% fit$inv_hessian %*% t(x_i)) * as.numeric(fit$w_diag[i])}
-
-# ---- D. Pemilihan bandwidth dengan AICc (tiap kernel) ----
-hitung_ic_gwnbr <- function(W_fun, X, Y, offset_val, theta, beta_start) {
+# C4. Menghitung AICc GWNBR
+hitung_ic_gwnbr <- function(W_fun, X, Y, offset_val,
+                            theta, beta_start) {
   n <- nrow(X)
-  gagal <- list(AIC = Inf, AICc = Inf, EDF = NA_real_, K_eff = NA_real_, LogLik = NA_real_)
-  y_hat  <- rep(NA_real_, n)
+  
+  gagal <- list(
+    AIC = Inf,
+    AICc = Inf,
+    EDF = NA_real_,
+    K_eff = NA_real_,
+    LogLik = NA_real_
+  )
+  
+  y_hat <- rep(NA_real_, n)
   S_diag <- rep(NA_real_, n)
   
   for (i in seq_len(n)) {
+    
     fit_i <- tryCatch(
-      fit_gwnbr_local(X, Y, offset_val, theta, W_fun(i), beta_start),
-      error = function(e) NULL)
-    if (is.null(fit_i) || !fit_i$konvergen) return(gagal)
+      fit_gwnbr_local(
+        X = X,
+        Y = Y,
+        offset_val = offset_val,
+        theta = theta,
+        W_i = W_fun(i),
+        beta_start = beta_start
+      ),
+      error = function(e) NULL
+    )
+    
+    if (is.null(fit_i) || !isTRUE(fit_i$konvergen)) {
+      return(gagal)
+    }
+    
     y_hat[i] <- fit_i$y_hat[i]
-    x_i <- matrix(as.numeric(X[i, ]), nrow = 1)
-    S_diag[i] <- as.numeric(x_i %*% fit_i$inv_hessian %*% t(x_i)) * fit_i$w_diag[i]
+    
+    x_i <- matrix(
+      as.numeric(X[i, ]),
+      nrow = 1
+    )
+    
+    S_diag[i] <- as.numeric(
+      x_i %*% fit_i$inv_hessian %*% t(x_i)
+    ) * fit_i$w_diag[i]
   }
-  if (any(!is.finite(y_hat)) || any(!is.finite(S_diag))) return(gagal)
   
-  EDF    <- sum(S_diag)
-  K_eff  <- EDF + 1
-  loglik <- sum(dnbinom(Y, size = theta, mu = y_hat, log = TRUE))
-  denom  <- n - K_eff - 1
-  if (!is.finite(loglik) || denom <= 0) return(gagal)
+  if (any(!is.finite(y_hat)) ||
+      any(!is.finite(S_diag))) {
+    return(gagal)
+  }
   
-  AIC  <- -2 * loglik + 2 * K_eff
-  AICc <- AIC + (2 * K_eff * (K_eff + 1)) / denom
-  list(AIC = AIC, AICc = AICc, EDF = EDF, K_eff = K_eff, LogLik = loglik)}
+  # Effective Degrees of Freedom
+  EDF <- sum(S_diag)
+  
+  # Theta dihitung sebagai satu parameter tambahan
+  K_eff <- EDF + 1
+  
+  loglik <- sum(
+    dnbinom(
+      Y,
+      size = theta,
+      mu = y_hat,
+      log = TRUE
+    )
+  )
+  
+  denom <- n - K_eff - 1
+  
+  if (!is.finite(loglik) || denom <= 0) {
+    return(gagal)
+  }
+  
+  AIC <- -2 * loglik + 2 * K_eff
+  
+  AICc <- AIC +
+    (2 * K_eff * (K_eff + 1)) / denom
+  
+  list(
+    AIC = AIC,
+    AICc = AICc,
+    EDF = EDF,
+    K_eff = K_eff,
+    LogLik = loglik
+  )
+}
 
-# D2. Profil AICc adaptive bisquare
-min_k   <- n_vars + 3
-k_range <- min_k:n_obs
+# C5. Estimasi NBR untuk inisialisasi GWNBR
+# Digunakan pada data training, termasuk setiap fold LOOCV.
+estimasi_nbr_awal <- function(X, Y, offset_val) {
+  
+  n <- nrow(X)
+  p <- ncol(X)
+  
+  if (length(Y) != n || length(offset_val) != n) {
+    stop("Dimensi data NBR tidak sesuai.")
+  }
+  
+  data_nb <- data.frame(
+    y = as.numeric(Y),
+    off = as.numeric(offset_val)
+  )
+  
+  if (p > 1) {
+    for (j in 2:p) {
+      data_nb[[paste0("x", j - 1)]] <- X[, j]
+    }
+  }
+  
+  prediktor <- paste0("x", seq_len(p - 1))
+  
+  formula_nb <- as.formula(
+    paste(
+      "y ~",
+      paste(prediktor, collapse = " + "),
+      "+ offset(off)"
+    )
+  )
+  
+  fit_nb <- suppressWarnings(
+    MASS::glm.nb(
+      formula_nb,
+      data = data_nb,
+      control = glm.control(maxit = 100)
+    )
+  )
+  
+  hasil_beta <- as.numeric(coef(fit_nb))
+  hasil_theta <- as.numeric(fit_nb$theta)
+  
+  if (!is.finite(hasil_theta) ||
+      hasil_theta <= 0 ||
+      length(hasil_beta) != p ||
+      any(!is.finite(hasil_beta))) {
+    stop("Estimasi NBR untuk inisialisasi tidak valid.")
+  }
+  
+  list(
+    theta = hasil_theta,
+    beta_start = hasil_beta
+  )
+}
 
-profil_aicc_adaptive <- data.frame(k = k_range, EDF = NA_real_, K_eff = NA_real_,
-                                   LogLik = NA_real_, AIC = NA_real_, AICc = NA_real_)
-for (j in seq_along(k_range)) {
-  k <- k_range[j]
-  hs <- hitung_ic_gwnbr(function(i) bobot_adaptif(dist_matrix[i, ], k),
-                        X_mat, Y_vec, off_vec, theta_global, beta_global)
-  profil_aicc_adaptive[j, c("EDF", "K_eff", "LogLik", "AIC", "AICc")] <-
-    c(hs$EDF, hs$K_eff, hs$LogLik, hs$AIC, hs$AICc)}
+# C6. Bobot Adaptive Bisquare untuk lokasi uji
+bobot_adaptif_new <- function(dists, k) {
+  
+  if (length(dists) < 1 ||
+      any(!is.finite(dists)) ||
+      any(dists < 0)) {
+    stop("Jarak lokasi uji tidak valid.")
+  }
+  
+  if (length(k) != 1 ||
+      k != as.integer(k) ||
+      k < 1 ||
+      k > length(dists)) {
+    stop("Bandwidth adaptive tidak valid.")
+  }
+  
+  h <- sort(dists)[k]
+  
+  if (!is.finite(h) || h <= 0) {
+    stop("Bandwidth adaptive tidak valid.")
+  }
+  
+  w <- ifelse(
+    dists <= h,
+    (1 - (dists / h)^2)^2,
+    0
+  )
+  
+  as.numeric(w)
+}
 
-# D3. Profil AICc fixed Gaussian (h dalam meter)
+# D. PEMILIHAN BANDWIDTH BERDASARKAN AICc
+# ---- D1. Persiapan ----
+min_k <- ncol(X_mat) + 3
+k_range <- min_k:(n_obs - 1)
+
+if (length(k_range) == 0) {
+  stop("Rentang bandwidth Adaptive Bisquare tidak valid.")
+}
+
 jarak_unik <- dist_matrix[upper.tri(dist_matrix)]
-h_range <- unique(as.numeric(quantile(jarak_unik, probs = seq(0.25, 1, by = 0.05), na.rm = TRUE)))
+jarak_unik <- jarak_unik[is.finite(jarak_unik) & jarak_unik > 0]
 
-profil_aicc_gauss <- data.frame(Bandwidth_m = h_range, EDF = NA_real_, K_eff = NA_real_,
-                                LogLik = NA_real_, AIC = NA_real_, AICc = NA_real_)
+if (length(jarak_unik) == 0) {
+  stop("Tidak ditemukan jarak antarlokasi yang valid.")
+}
+
+jarak_maks <- max(jarak_unik)
+
+
+# ---- D2. Profil AICc Adaptive Bisquare ----
+profil_aicc_adaptive <- data.frame(
+  k = k_range,
+  EDF = NA_real_,
+  K_eff = NA_real_,
+  LogLik = NA_real_,
+  AIC = NA_real_,
+  AICc = NA_real_
+)
+
+for (j in seq_along(k_range)) {
+  
+  k <- k_range[j]
+  
+  hs <- hitung_ic_gwnbr(
+    function(i) bobot_adaptif(dist_matrix[i, ], k),
+    X_mat, Y_vec, off_vec,
+    theta_global, beta_global
+  )
+  
+  profil_aicc_adaptive[j, 2:6] <- unlist(
+    hs[c("EDF", "K_eff", "LogLik", "AIC", "AICc")]
+  )
+}
+
+# ---- D3. Profil AICc Fixed Gaussian ----
+# Kandidat bandwidth awal berdasarkan kuantil jarak
+h_awal <- as.numeric(
+  quantile(
+    jarak_unik,
+    probs = seq(0.25, 1, by = 0.05),
+    na.rm = TRUE
+  )
+)
+
+# Perluasan rentang hingga 32 kali jarak maksimum
+h_lanjutan <- seq(
+  jarak_maks * 1.05,
+  jarak_maks * 32,
+  length.out = 100
+)
+
+h_range <- sort(unique(c(h_awal, h_lanjutan)))
+
+profil_aicc_gauss <- data.frame(
+  Bandwidth_m = h_range,
+  EDF = NA_real_,
+  K_eff = NA_real_,
+  LogLik = NA_real_,
+  AIC = NA_real_,
+  AICc = NA_real_
+)
+
 for (j in seq_along(h_range)) {
+  
   h <- h_range[j]
-  hs <- hitung_ic_gwnbr(function(i) bobot_fixed_gaussian(dist_matrix[i, ], h),
-                        X_mat, Y_vec, off_vec, theta_global, beta_global)
-  profil_aicc_gauss[j, c("EDF", "K_eff", "LogLik", "AIC", "AICc")] <-
-    c(hs$EDF, hs$K_eff, hs$LogLik, hs$AIC, hs$AICc)}
+  
+  hs <- hitung_ic_gwnbr(
+    function(i) bobot_fixed_gaussian(dist_matrix[i, ], h),
+    X_mat, Y_vec, off_vec,
+    theta_global, beta_global
+  )
+  
+  profil_aicc_gauss[j, 2:6] <- unlist(
+    hs[c("EDF", "K_eff", "LogLik", "AIC", "AICc")]
+  )
+}
 
-# D4. Bandwidth optimal = AICc minimum tiap kernel
-stopifnot(any(is.finite(profil_aicc_adaptive$AICc)), any(is.finite(profil_aicc_gauss$AICc)))
+# ---- D4. Pemilihan dan pemeriksaan posisi minimum ----
+if (!any(is.finite(profil_aicc_adaptive$AICc)) ||
+    !any(is.finite(profil_aicc_gauss$AICc))) {
+  stop("Tidak ditemukan nilai AICc yang valid.")
+}
+
 idx_ad <- which.min(profil_aicc_adaptive$AICc)
 idx_ga <- which.min(profil_aicc_gauss$AICc)
-bw_opt   <- profil_aicc_adaptive$k[idx_ad]          # adaptive bisquare (k tetangga)
-bw_gauss <- profil_aicc_gauss$Bandwidth_m[idx_ga]   # fixed Gaussian (meter)
 
-batas_atas_ad <- max(k_range)
-batas_atas_ga <- max(h_range)
-di_batas_ad <- bw_opt == batas_atas_ad
-di_batas_ga <- isTRUE(all.equal(bw_gauss, batas_atas_ga))
-if (di_batas_ad) warning("Bandwidth adaptive bisquare berada di batas atas rentang pencarian.")
-if (di_batas_ga) warning("Bandwidth fixed Gaussian berada di batas atas rentang pencarian.")
+bw_opt <- profil_aicc_adaptive$k[idx_ad]
+bw_gauss <- profil_aicc_gauss$Bandwidth_m[idx_ga]
+
+status_ad <- if (idx_ad == 1) {
+  "Batas bawah"
+} else if (idx_ad == nrow(profil_aicc_adaptive)) {
+  "Batas atas"
+} else {
+  "Minimum interior"
+}
+
+status_ga <- if (idx_ga == 1) {
+  "Batas bawah"
+} else if (idx_ga == nrow(profil_aicc_gauss)) {
+  "Batas atas"
+} else {
+  "Minimum interior"
+}
 
 tabel_bandwidth <- data.frame(
-  Kernel        = c("Adaptive Bisquare", "Fixed Gaussian"),
-  Kriteria      = "AICc",
-  Bandwidth     = c(bw_opt, bw_gauss),
-  Satuan        = c("jumlah tetangga (k)", "meter"),
-  Minimum_AICc  = c(profil_aicc_adaptive$AICc[idx_ad], profil_aicc_gauss$AICc[idx_ga]),
-  Batas_Atas    = c(batas_atas_ad, batas_atas_ga),
-  Di_Batas_Atas = c(di_batas_ad, di_batas_ga))
+  Kernel = c("Adaptive Bisquare", "Fixed Gaussian"),
+  Bandwidth = c(bw_opt, bw_gauss),
+  Satuan = c("Jumlah tetangga", "Meter"),
+  Minimum_AICc = c(
+    profil_aicc_adaptive$AICc[idx_ad],
+    profil_aicc_gauss$AICc[idx_ga]
+  ),
+  Posisi_Minimum = c(status_ad, status_ga)
+)
 
-png(file.path(folder_out_04, "Profil_AICc_Adaptive_Bisquare.png"), width = 1800, height = 1200, res = 300)
-plot(profil_aicc_adaptive$k, profil_aicc_adaptive$AICc, type = "b",
-     xlab = "Number of nearest neighbors (k)", ylab = "AICc",
-     main = "Adaptive Bisquare Bandwidth Selection")
+print(tabel_bandwidth)
+
+if (status_ad != "Minimum interior") {
+  warning(
+    "Adaptive Bisquare belum memiliki minimum interior. ",
+    "Periksa profil AICc dan interpretasikan hasil sebagai minimum pada batas rentang."
+  )
+}
+
+if (status_ga != "Minimum interior") {
+  warning(
+    "Fixed Gaussian belum memiliki minimum interior. ",
+    "Periksa profil AICc dan interpretasikan hasil sebagai minimum pada batas rentang."
+  )
+}
+
+# ---- D5. Grafik Adaptive Bisquare ----
+png(
+  file.path(folder_out_04, "Profil_AICc_Adaptive_Bisquare.png"),
+  width = 1800, height = 1200, res = 300
+)
+
+plot(
+  profil_aicc_adaptive$k,
+  profil_aicc_adaptive$AICc,
+  type = "b",
+  xlab = "Number of nearest neighbors (k)",
+  ylab = "AICc",
+  main = "Adaptive Bisquare Bandwidth Selection"
+)
+
 abline(v = bw_opt, lty = 2)
+
 dev.off()
 
-png(file.path(folder_out_04, "Profil_AICc_Fixed_Gaussian.png"), width = 1800, height = 1200, res = 300)
-plot(profil_aicc_gauss$Bandwidth_m / 1000, profil_aicc_gauss$AICc, type = "b",
-     xlab = "Bandwidth (km)", ylab = "AICc", main = "Fixed Gaussian Bandwidth Selection")
+# ---- D6. Grafik Fixed Gaussian ----
+png(
+  file.path(folder_out_04, "Profil_AICc_Fixed_Gaussian.png"),
+  width = 1800, height = 1200, res = 300
+)
+
+plot(
+  profil_aicc_gauss$Bandwidth_m / 1000,
+  profil_aicc_gauss$AICc,
+  type = "l",
+  xlab = "Bandwidth (km)",
+  ylab = "AICc",
+  main = "Fixed Gaussian Bandwidth Selection"
+)
+
+points(
+  profil_aicc_gauss$Bandwidth_m[idx_ga] / 1000,
+  profil_aicc_gauss$AICc[idx_ga],
+  pch = 19
+)
+
 abline(v = bw_gauss / 1000, lty = 2)
+
 dev.off()
 
-# ---- F. Estimasi parameter lokal pada bandwidth terpilih (adaptive bisquare) ----
+# F. ESTIMASI PARAMETER LOKAL
 beta_mat    <- matrix(NA_real_, nrow = n_obs, ncol = n_vars)
 se_mat      <- matrix(NA_real_, nrow = n_obs, ncol = n_vars)
 y_hat_gwnbr <- rep(NA_real_, n_obs)
-tr_S_opt    <- rep(NA_real_, n_obs)
+S_mat       <- matrix(NA_real_, nrow = n_obs, ncol = n_obs)
 konv_vec    <- logical(n_obs)
 fit_simpan  <- vector("list", n_obs)
 
 for (i in seq_len(n_obs)) {
-  w_i   <- bobot_adaptif(dist_matrix[i, ], bw_opt)
+  
+  w_i <- bobot_adaptif(dist_matrix[i, ], bw_opt)
+  
   fit_i <- tryCatch(
-    fit_gwnbr_local(X_mat, Y_vec, off_vec, theta_global, w_i, beta_global),
-    error = function(e) NULL)
+    fit_gwnbr_local(
+      X_mat, Y_vec, off_vec,
+      theta_global, w_i, beta_global
+    ),
+    error = function(e) NULL
+  )
+  
   if (is.null(fit_i) || !fit_i$konvergen) next
+  
   fit_simpan[[i]] <- fit_i
   beta_mat[i, ]   <- fit_i$beta
   se_mat[i, ]     <- fit_i$se
   y_hat_gwnbr[i]  <- fit_i$y_hat[i]
-  tr_S_opt[i]     <- hitung_S_ii(fit_i, i)
-  konv_vec[i]     <- TRUE
+  
+  # Baris ke-i matriks smoother S
+  S_mat[i, ] <- as.numeric(
+    X_mat[i, , drop = FALSE] %*%
+      fit_i$inv_hessian %*%
+      t(X_mat)
+  ) * fit_i$w_diag
+  
+  konv_vec[i] <- TRUE
 }
-cat("Lokasi tidak konvergen:", sum(!konv_vec), "dari", n_obs, "\n")
-if (any(!konv_vec)) stop("Ada lokasi yang tidak konvergen; periksa sebelum melanjutkan.")
+
+cat(
+  "Lokasi tidak konvergen:",
+  sum(!konv_vec), "dari", n_obs, "\n"
+)
+
+if (any(!konv_vec)) {
+  stop("Ada lokasi yang tidak konvergen; periksa sebelum melanjutkan.")
+}
+
+if (any(!is.finite(beta_mat)) ||
+    any(!is.finite(se_mat)) ||
+    any(se_mat <= 0) ||
+    any(!is.finite(y_hat_gwnbr)) ||
+    any(!is.finite(S_mat))) {
+  stop("Terdapat koefisien, SE, prediksi, atau elemen S yang tidak valid.")
+}
 
 colnames(beta_mat) <- coef_names
 colnames(se_mat)   <- paste0(coef_names, "_SE")
-v_eff_opt <- sum(tr_S_opt)
 
-# ---- G. Tabel koefisien lokal (uji Z dua sisi) ----
-df_04_lengkap <- df_model %>% dplyr::select(Kabupaten)
+v_eff_opt <- sum(diag(S_mat))
+tr_STS <- sum(S_mat^2)
+p_eff <- 2 * v_eff_opt - tr_STS
+
+# Koreksi multiple testing da Silva dan Fotheringham
+alpha_ds <- 0.05 / (p_eff / n_vars)
+
+# G. TABEL KOEFISIEN LOKAL DAN UJI Z DUA SISI
+df_04_lengkap <- df_model %>%
+  dplyr::select(Kabupaten)
+
 for (j in seq_along(coef_names)) {
-  v     <- coef_names[j]
+  
+  v <- coef_names[j]
+  
   z_val <- beta_mat[, j] / se_mat[, j]
+  p_val <- 2 * pnorm(-abs(z_val))
+  
   df_04_lengkap[[paste0("Beta_", v)]] <- beta_mat[, j]
   df_04_lengkap[[paste0("SE_", v)]]   <- se_mat[, j]
   df_04_lengkap[[paste0("Z_", v)]]    <- z_val
-  df_04_lengkap[[paste0("p_", v)]]    <- 2 * pnorm(-abs(z_val))
+  df_04_lengkap[[paste0("p_", v)]]    <- p_val
 }
+
 df_04_lengkap$Y_Aktual   <- Y_vec
 df_04_lengkap$Y_Prediksi <- y_hat_gwnbr
 df_04_lengkap$Residual   <- Y_vec - y_hat_gwnbr
 
-# ---- Koreksi pengujian berganda da Silva dan Fotheringham (2016) ----
-alpha_family <- 0.05
-ENP <- 2 * tr_S - tr_StS
-p_local <- 6
-
-alpha_ds <- (alpha_family * p_local) / ENP
-tabel_koreksi <- data.frame(
-  Indikator = c(
-    "tr(S)",
-    "tr(S'S)",
-    "Effective number of parameters (ENP)",
-    "Jumlah parameter lokal (p)",
-    "Alpha awal",
-    "Alpha terkoreksi da Silva dan Fotheringham"
-  ),
-  Nilai = c(tr_S,tr_StS,ENP,p_local,alpha_family,alpha_ds)
-)
-
-# ---- H. Ringkasan deskriptif parameter lokal ----
+# H. RINGKASAN DESKRIPTIF PARAMETER LOKAL
 summary_list <- list()
+
 for (v in coef_names) {
+  
   vals <- df_04_lengkap[[paste0("Beta_", v)]]
+  
   summary_list[[v]] <- data.frame(
-    Variabel = v, Min = min(vals, na.rm = TRUE),
-    Q1 = quantile(vals, 0.25, na.rm = TRUE), Median = median(vals, na.rm = TRUE),
-    Mean = mean(vals, na.rm = TRUE), Q3 = quantile(vals, 0.75, na.rm = TRUE),
-    Max = max(vals, na.rm = TRUE), Std_Dev = sd(vals, na.rm = TRUE))
-}
-df_05_ringkas <- do.call(rbind, summary_list)
-rownames(df_05_ringkas) <- NULL
-
-# ---- I. Signifikansi (alpha 0.05 dan terkoreksi) & arah koefisien ----
-sig_list <- list(); dir_list <- list()
-for (v in coef_names) {
-  p_col <- df_04_lengkap[[paste0("p_", v)]]
-  b_col <- df_04_lengkap[[paste0("Beta_", v)]]
-  n_05  <- sum(p_col < 0.05, na.rm = TRUE)
-  n_adj <- sum(p_col < alpha_byrne, na.rm = TRUE)
-  sig_list[[v]] <- data.frame(Variabel = v, Signif_p005 = n_05,
-                              Persen_p005 = round(n_05 / n_obs * 100, 2),
-                              Signif_Terkoreksi = n_adj,
-                              Persen_Terkoreksi = round(n_adj / n_obs * 100, 2))
-  dir_list[[v]] <- data.frame(Variabel = v,
-                              Pengaruh_Positif = sum(b_col > 0, na.rm = TRUE),
-                              Pengaruh_Negatif = sum(b_col < 0, na.rm = TRUE))
-}
-df_06_jumlah_sig <- do.call(rbind, sig_list)
-df_07_arah_peng  <- do.call(rbind, dir_list)
-
-# ---- J. Evaluasi GWNBR in-sample (theta dihitung sebagai parameter pada semua model) ----
-SSE_gwnbr <- sum((Y_vec - y_hat_gwnbr)^2)
-SST_gwnbr <- sum((Y_vec - mean(Y_vec))^2)
-r2_gwnbr       <- 1 - SSE_gwnbr / SST_gwnbr
-rmse_gwnbr_fit <- sqrt(mean((Y_vec - y_hat_gwnbr)^2))
-mae_gwnbr_fit  <- mean(abs(Y_vec - y_hat_gwnbr))
-
-ll_gwnbr    <- sum(dnbinom(Y_vec, size = theta_global, mu = y_hat_gwnbr, log = TRUE))
-k_par_gwnbr <- v_eff_opt + 1
-aic_gwnbr   <- -2 * ll_gwnbr + 2 * k_par_gwnbr
-aicc_gwnbr  <- aic_gwnbr + (2 * k_par_gwnbr * (k_par_gwnbr + 1)) / (n_obs - k_par_gwnbr - 1)
-
-df_11_evaluasi <- data.frame(
-  Indikator = c("Bandwidth (k-NN)", "Effective Degrees of Freedom (v)", "Log-Likelihood",
-                "AIC (theta dihitung)", "AICc (theta dihitung)",
-                "R-Squared (in-sample)", "RMSE (in-sample)", "MAE (in-sample)"),
-  Nilai = c(bw_opt, v_eff_opt, ll_gwnbr, aic_gwnbr, aicc_gwnbr,
-            r2_gwnbr, rmse_gwnbr_fit, mae_gwnbr_fit))
-
-# ---- K. Kelompok signifikansi per wilayah ----
-buat_kelompok <- function(ambang) {
-  sapply(seq_len(n_obs), function(i) {
-    p_i <- sapply(coef_names, function(v) df_04_lengkap[[paste0("p_", v)]][i])
-    paste(coef_names[which(p_i < ambang)], collapse = ", ")
-  })
-}
-df_kelompok_sig <- data.frame(
-  Kabupaten = df_04_lengkap$Kabupaten,
-  Parameter_Signifikan_p005       = buat_kelompok(0.05),
-  Parameter_Signifikan_Terkoreksi = buat_kelompok(alpha_byrne))
-
-# ---- L. Perbandingan AIC/AICc: NBR vs GWNBR (kedua kernel) ----
-ll_nbr   <- as.numeric(logLik(model_nbr))
-k_nbr    <- attr(logLik(model_nbr), "df")
-aic_nbr  <- -2 * ll_nbr + 2 * k_nbr
-aicc_nbr <- aic_nbr + (2 * k_nbr * (k_nbr + 1)) / (n_obs - k_nbr - 1)
-
-tabel_aicc_gwnbr <- data.frame(
-  Model          = c("NBR", "GWNBR Adaptive Bisquare", "GWNBR Fixed Gaussian"),
-  Log_Likelihood = round(c(ll_nbr, ll_gwnbr, profil_aicc_gauss$LogLik[idx_ga]), 3),
-  Param_Efektif  = round(c(k_nbr, k_par_gwnbr, profil_aicc_gauss$K_eff[idx_ga]), 3),
-  AIC            = round(c(aic_nbr, aic_gwnbr, profil_aicc_gauss$AIC[idx_ga]), 3),
-  AICc           = round(c(aicc_nbr, aicc_gwnbr, profil_aicc_gauss$AICc[idx_ga]), 3))
-
-# ---- M. LOOCV GWNBR dengan bandwidth tetap dari data penuh (analisis tambahan) ----
-cv_global <- lapply(seq_len(n_obs), function(i) {
-  fit <- tryCatch(suppressWarnings(MASS::glm.nb(form_nbr, data = df_model[-i, ])),
-                  error = function(e) NULL)
-  if (is.null(fit) || !is.finite(fit$theta) || fit$theta <= 0 || any(!is.finite(coef(fit)))) {
-    list(theta = theta_global, beta = beta_global, ok = FALSE)
-  } else {
-    list(theta = fit$theta, beta = as.numeric(coef(fit)), ok = TRUE)
-  }
-})
-cat("Fold dengan re-estimasi NBR gagal:", sum(!sapply(cv_global, `[[`, "ok")), "\n")
-
-loocv_gwnbr_bw_tetap <- function(W_cv_fun) {
-  y_pred <- rep(NA_real_, n_obs)
-  for (i in seq_len(n_obs)) {
-    fit_i <- tryCatch(
-      fit_gwnbr_local(X_mat, Y_vec, off_vec, theta = cv_global[[i]]$theta,
-                      W_i = W_cv_fun(i), beta_start = cv_global[[i]]$beta),
-      error = function(e) NULL)
-    if (is.null(fit_i) || !fit_i$konvergen) next
-    eta_i <- sum(X_mat[i, ] * fit_i$beta) + off_vec[i]
-    y_pred[i] <- exp(pmin(pmax(eta_i, -20), 20))
-  }
-  y_pred
-}
-
-# ---- Fungsi menghitung metrik evaluasi ----
-hitung_evaluasi <- function(y_aktual, y_prediksi) {
-  error <- y_aktual - y_prediksi
-  
-  SSE <- sum(error^2)
-  SST <- sum((y_aktual - mean(y_aktual))^2)
-  
-  R2 <- 1 - (SSE / SST)
-  RMSE <- sqrt(mean(error^2))
-  MAE <- mean(abs(error))
-  
-  list(
-    R2 = R2,
-    RMSE = RMSE,
-    MAE = MAE
+    Variabel = v,
+    Min = min(vals, na.rm = TRUE),
+    Q1 = quantile(vals, 0.25, na.rm = TRUE),
+    Median = median(vals, na.rm = TRUE),
+    Mean = mean(vals, na.rm = TRUE),
+    Q3 = quantile(vals, 0.75, na.rm = TRUE),
+    Max = max(vals, na.rm = TRUE),
+    Std_Dev = sd(vals, na.rm = TRUE)
   )
 }
 
-metrik_loocv <- function(nama, y_pred) {
-  if (!all(is.finite(y_pred))) {
-    warning("Sebagian prediksi LOOCV ", nama, " tidak valid.")
-    return(data.frame(Model = nama, N_Valid = sum(is.finite(y_pred)),
-                      R2_LOOCV = NA_real_, RMSE_LOOCV = NA_real_, MAE_LOOCV = NA_real_))
-  }
-  e <- hitung_evaluasi(Y_vec, y_pred)
-  data.frame(Model = nama, N_Valid = length(y_pred),
-             R2_LOOCV = e$R2, RMSE_LOOCV = e$RMSE, MAE_LOOCV = e$MAE)}
+df_05_ringkas <- do.call(rbind, summary_list)
+rownames(df_05_ringkas) <- NULL
 
-y_pred_ad <- loocv_gwnbr_bw_tetap(function(i) bobot_adaptif_cv(dist_matrix[i, ], i, bw_opt))
-y_pred_ga <- loocv_gwnbr_bw_tetap(function(i) {
-  w <- bobot_fixed_gaussian(dist_matrix[i, ], bw_gauss); w[i] <- 0; w
-})
-y_pred_gwnbr_loocv <- y_pred_ad
-evaluasi_loocv_gwnbr <- rbind(
-  metrik_loocv("GWNBR Adaptive Bisquare (bw tetap)", y_pred_ad),
-  metrik_loocv("GWNBR Fixed Gaussian (bw tetap)",    y_pred_ga))
+# I. SIGNIFIKANSI DAN ARAH KOEFISIEN
+sig_list <- list()
+dir_list <- list()
+
+for (v in coef_names) {
+  
+  p_col <- df_04_lengkap[[paste0("p_", v)]]
+  b_col <- df_04_lengkap[[paste0("Beta_", v)]]
+  
+  n_05  <- sum(p_col < 0.05, na.rm = TRUE)
+  n_adj <- sum(p_col < alpha_ds, na.rm = TRUE)
+  
+  sig_list[[v]] <- data.frame(
+    Variabel = v,
+    Signif_p005 = n_05,
+    Persen_p005 = round(n_05 / n_obs * 100, 2),
+    Signif_Terkoreksi = n_adj,
+    Persen_Terkoreksi = round(n_adj / n_obs * 100, 2)
+  )
+  
+  dir_list[[v]] <- data.frame(
+    Variabel = v,
+    Pengaruh_Positif = sum(b_col > 0, na.rm = TRUE),
+    Pengaruh_Negatif = sum(b_col < 0, na.rm = TRUE)
+  )
+}
+
+df_06_jumlah_sig <- do.call(rbind, sig_list)
+df_07_arah_peng  <- do.call(rbind, dir_list)
+
+# J. EVALUASI GWNBR IN-SAMPLE
+SSE_gwnbr <- sum((Y_vec - y_hat_gwnbr)^2)
+SST_gwnbr <- sum((Y_vec - mean(Y_vec))^2)
+
+r2_gwnbr <- 1 - SSE_gwnbr / SST_gwnbr
+rmse_gwnbr_fit <- sqrt(mean((Y_vec - y_hat_gwnbr)^2))
+mae_gwnbr_fit  <- mean(abs(Y_vec - y_hat_gwnbr))
+
+ll_gwnbr <- sum(
+  dnbinom(
+    Y_vec,
+    size = theta_global,
+    mu = y_hat_gwnbr,
+    log = TRUE
+  )
+)
+
+k_par_gwnbr <- v_eff_opt + 1
+
+if (n_obs - k_par_gwnbr - 1 <= 0) {
+  stop("AICc GWNBR tidak dapat dihitung karena penyebut tidak valid.")
+}
+
+aic_gwnbr <- -2 * ll_gwnbr + 2 * k_par_gwnbr
+
+aicc_gwnbr <- aic_gwnbr +
+  (2 * k_par_gwnbr * (k_par_gwnbr + 1)) /
+  (n_obs - k_par_gwnbr - 1)
+
+df_11_evaluasi <- data.frame(
+  Indikator = c(
+    "Bandwidth (k-NN)",
+    "Effective Degrees of Freedom (v)",
+    "Log-Likelihood",
+    "AIC (theta dihitung)",
+    "AICc (theta dihitung)",
+    "R-Squared (in-sample)",
+    "RMSE (in-sample)",
+    "MAE (in-sample)"
+  ),
+  Nilai = c(
+    bw_opt, v_eff_opt, ll_gwnbr,
+    aic_gwnbr, aicc_gwnbr,
+    r2_gwnbr, rmse_gwnbr_fit, mae_gwnbr_fit
+  )
+)
+# K. KELOMPOK SIGNIFIKANSI PER WILAYAH
+buat_kelompok <- function(ambang) {
+  
+  sapply(seq_len(n_obs), function(i) {
+    
+    p_i <- sapply(
+      coef_names,
+      function(v) df_04_lengkap[[paste0("p_", v)]][i]
+    )
+    
+    paste(
+      coef_names[which(p_i < ambang)],
+      collapse = ", "
+    )
+  })
+}
+
+df_kelompok_sig <- data.frame(
+  Kabupaten = df_04_lengkap$Kabupaten,
+  Parameter_Signifikan_p005 = buat_kelompok(0.05),
+  Parameter_Signifikan_Terkoreksi = buat_kelompok(alpha_ds)
+)
+# L. PERBANDINGAN AIC/AICc NBR DAN GWNBR
+ll_nbr  <- as.numeric(logLik(model_nbr))
+k_nbr   <- attr(logLik(model_nbr), "df")
+
+aic_nbr <- -2 * ll_nbr + 2 * k_nbr
+
+if (n_obs - k_nbr - 1 <= 0) {
+  stop("AICc NBR tidak dapat dihitung karena penyebut tidak valid.")
+}
+
+aicc_nbr <- aic_nbr +
+  (2 * k_nbr * (k_nbr + 1)) /
+  (n_obs - k_nbr - 1)
+
+tabel_aicc_gwnbr <- data.frame(
+  Model = c(
+    "NBR",
+    "GWNBR Adaptive Bisquare",
+    "GWNBR Fixed Gaussian"
+  ),
+  Log_Likelihood = round(
+    c(
+      ll_nbr,
+      ll_gwnbr,
+      profil_aicc_gauss$LogLik[idx_ga]
+    ), 3
+  ),
+  Param_Efektif = round(
+    c(
+      k_nbr,
+      k_par_gwnbr,
+      profil_aicc_gauss$K_eff[idx_ga]
+    ), 3
+  ),
+  AIC = round(
+    c(
+      aic_nbr,
+      aic_gwnbr,
+      profil_aicc_gauss$AIC[idx_ga]
+    ), 3
+  ),
+  AICc = round(
+    c(
+      aicc_nbr,
+      aicc_gwnbr,
+      profil_aicc_gauss$AICc[idx_ga]
+    ), 3
+  )
+)
+
+print(tabel_aicc_gwnbr)
+
+# ---- M. NESTED LOOCV GWNBR ----
+# M1. Fungsi seleksi bandwidth pada data training
+pilih_bandwidth_fold <- function(X_train, Y_train, off_train,
+                                 D_train, theta_train, beta_train,
+                                 kernel = c("adaptive", "gaussian")) {
+  
+  kernel <- match.arg(kernel)
+  n_train <- nrow(X_train)
+  
+  if (nrow(D_train) != n_train ||
+      ncol(D_train) != n_train) {
+    stop("Dimensi matriks jarak training tidak sesuai.")
+  }
+  
+  # --------------------------------
+  # Adaptive Bisquare
+  # --------------------------------
+  if (kernel == "adaptive") {
+    
+    min_k_fold <- ncol(X_train) + 3
+    k_range_fold <- min_k_fold:(n_train - 1)
+    
+    if (length(k_range_fold) == 0) {
+      stop("Rentang bandwidth Adaptive Bisquare tidak valid.")
+    }
+    
+    hasil_aicc <- rep(Inf, length(k_range_fold))
+    
+    for (j in seq_along(k_range_fold)) {
+      
+      k <- k_range_fold[j]
+      
+      hasil_ic <- tryCatch(
+        hitung_ic_gwnbr(
+          W_fun = function(i) {
+            bobot_adaptif(D_train[i, ], k)
+          },
+          X = X_train,
+          Y = Y_train,
+          offset_val = off_train,
+          theta = theta_train,
+          beta_start = beta_train
+        ),
+        error = function(e) NULL
+      )
+      
+      if (!is.null(hasil_ic) &&
+          is.finite(hasil_ic$AICc)) {
+        hasil_aicc[j] <- hasil_ic$AICc
+      }
+    }
+    
+    if (!any(is.finite(hasil_aicc))) {
+      stop("Tidak ditemukan AICc Adaptive Bisquare yang valid.")
+    }
+    
+    idx <- which.min(hasil_aicc)
+    
+    return(list(
+      bandwidth = k_range_fold[idx],
+      AICc = hasil_aicc[idx]
+    ))
+  }
+  
+  # --------------------------------
+  # Fixed Gaussian
+  # --------------------------------
+  if (kernel == "gaussian") {
+    
+    jarak_unik_fold <- D_train[upper.tri(D_train)]
+    jarak_unik_fold <- jarak_unik_fold[
+      is.finite(jarak_unik_fold) & jarak_unik_fold > 0
+    ]
+    
+    if (length(jarak_unik_fold) == 0) {
+      stop("Jarak antarlokasi training tidak valid.")
+    }
+    
+    jarak_maks_fold <- max(jarak_unik_fold)
+    
+    h_awal_fold <- as.numeric(
+      quantile(
+        jarak_unik_fold,
+        probs = seq(0.25, 1, by = 0.05),
+        na.rm = TRUE
+      )
+    )
+    
+    h_lanjutan_fold <- seq(
+      jarak_maks_fold * 1.05,
+      jarak_maks_fold * 32,
+      length.out = 100
+    )
+    
+    h_range_fold <- sort(
+      unique(c(h_awal_fold, h_lanjutan_fold))
+    )
+    
+    hasil_aicc <- rep(Inf, length(h_range_fold))
+    
+    for (j in seq_along(h_range_fold)) {
+      
+      h <- h_range_fold[j]
+      
+      hasil_ic <- tryCatch(
+        hitung_ic_gwnbr(
+          W_fun = function(i) {
+            bobot_fixed_gaussian(D_train[i, ], h)
+          },
+          X = X_train,
+          Y = Y_train,
+          offset_val = off_train,
+          theta = theta_train,
+          beta_start = beta_train
+        ),
+        error = function(e) NULL
+      )
+      
+      if (!is.null(hasil_ic) &&
+          is.finite(hasil_ic$AICc)) {
+        hasil_aicc[j] <- hasil_ic$AICc
+      }
+    }
+    
+    if (!any(is.finite(hasil_aicc))) {
+      stop("Tidak ditemukan AICc Fixed Gaussian yang valid.")
+    }
+    
+    idx <- which.min(hasil_aicc)
+    
+    return(list(
+      bandwidth = h_range_fold[idx],
+      AICc = hasil_aicc[idx]
+    ))
+  }
+}
+
+
+# M2. Fungsi Nested LOOCV untuk satu kernel
+nested_loocv_gwnbr <- function(kernel = c("adaptive", "gaussian")) {
+  
+  kernel <- match.arg(kernel)
+  
+  y_pred <- rep(NA_real_, n_obs)
+  bandwidth_fold <- rep(NA_real_, n_obs)
+  aicc_fold <- rep(NA_real_, n_obs)
+  theta_fold <- rep(NA_real_, n_obs)
+  status_fold <- rep("Gagal", n_obs)
+  
+  for (i in seq_len(n_obs)) {
+    
+    cat(
+      "\nKernel:", kernel,
+      "| Fold:", i, "dari", n_obs, "\n"
+    )
+    
+    # Data training dan testing
+    idx_train <- setdiff(seq_len(n_obs), i)
+    
+    X_train <- X_mat[idx_train, , drop = FALSE]
+    Y_train <- Y_vec[idx_train]
+    off_train <- off_vec[idx_train]
+    
+    X_test <- X_mat[i, , drop = FALSE]
+    off_test <- off_vec[i]
+    
+    D_train <- dist_matrix[
+      idx_train, idx_train,
+      drop = FALSE
+    ]
+    
+    D_test <- as.numeric(
+      dist_matrix[i, idx_train]
+    )
+    
+    # Estimasi NBR hanya dari data training
+    nbr_train <- tryCatch(
+      estimasi_nbr_awal(
+        X_train,
+        Y_train,
+        off_train
+      ),
+      error = function(e) NULL
+    )
+    
+    if (is.null(nbr_train)) {
+      status_fold[i] <- "Gagal estimasi NBR"
+      next
+    }
+    
+    theta_train <- nbr_train$theta
+    beta_train <- nbr_train$beta_start
+    
+    theta_fold[i] <- theta_train
+    
+    # Seleksi bandwidth hanya dari data training
+    bw_train <- tryCatch(
+      pilih_bandwidth_fold(
+        X_train = X_train,
+        Y_train = Y_train,
+        off_train = off_train,
+        D_train = D_train,
+        theta_train = theta_train,
+        beta_train = beta_train,
+        kernel = kernel
+      ),
+      error = function(e) NULL
+    )
+    
+    if (is.null(bw_train)) {
+      status_fold[i] <- "Gagal seleksi bandwidth"
+      next
+    }
+    
+    bandwidth_fold[i] <- bw_train$bandwidth
+    aicc_fold[i] <- bw_train$AICc
+    
+    # Bobot lokasi testing terhadap data training
+    if (kernel == "adaptive") {
+      
+      W_test <- tryCatch(
+        bobot_adaptif_new(
+          D_test,
+          bw_train$bandwidth
+        ),
+        error = function(e) NULL
+      )
+      
+    } else {
+      
+      W_test <- tryCatch(
+        bobot_fixed_gaussian(
+          D_test,
+          bw_train$bandwidth
+        ),
+        error = function(e) NULL
+      )
+    }
+    
+    if (is.null(W_test)) {
+      status_fold[i] <- "Gagal menghitung bobot"
+      next
+    }
+    
+    # Estimasi koefisien lokal pada lokasi testing
+    fit_test <- tryCatch(
+      fit_gwnbr_local(
+        X = X_train,
+        Y = Y_train,
+        offset_val = off_train,
+        theta = theta_train,
+        W_i = W_test,
+        beta_start = beta_train
+      ),
+      error = function(e) NULL
+    )
+    
+    if (is.null(fit_test) ||
+        !isTRUE(fit_test$konvergen)) {
+      status_fold[i] <- "Gagal konvergensi GWNBR"
+      next
+    }
+    
+    # Prediksi observasi yang dikeluarkan
+    eta_test <- as.numeric(
+      X_test %*% fit_test$beta + off_test
+    )
+    
+    eta_test <- pmin(pmax(eta_test, -20), 20)
+    
+    y_pred[i] <- exp(eta_test)
+    
+    status_fold[i] <- "Berhasil"
+  }
+  
+  list(
+    prediksi = y_pred,
+    bandwidth = bandwidth_fold,
+    AICc = aicc_fold,
+    theta = theta_fold,
+    status = status_fold
+  )
+}
+
+
+# M3. Menjalankan Nested LOOCV kedua kernel
+
+hasil_nested_ad <- nested_loocv_gwnbr("adaptive")
+
+hasil_nested_ga <- nested_loocv_gwnbr("gaussian")
+
+
+# M4. Menghitung metrik evaluasi
+metrik_nested <- function(nama, hasil) {
+  
+  valid <- is.finite(hasil$prediksi)
+  n_valid <- sum(valid)
+  
+  if (n_valid < 2) {
+    return(data.frame(
+      Model = nama,
+      N_Valid = n_valid,
+      R2_LOOCV = NA_real_,
+      RMSE_LOOCV = NA_real_,
+      MAE_LOOCV = NA_real_
+    ))
+  }
+  
+  evaluasi <- hitung_evaluasi(
+    Y_vec[valid],
+    hasil$prediksi[valid]
+  )
+  
+  data.frame(
+    Model = nama,
+    N_Valid = n_valid,
+    R2_LOOCV = evaluasi$R2,
+    RMSE_LOOCV = evaluasi$RMSE,
+    MAE_LOOCV = evaluasi$MAE
+  )
+}
+
+evaluasi_nested_gwnbr <- rbind(
+  metrik_nested(
+    "GWNBR Adaptive Bisquare (Nested LOOCV)",
+    hasil_nested_ad
+  ),
+  metrik_nested(
+    "GWNBR Fixed Gaussian (Nested LOOCV)",
+    hasil_nested_ga
+  )
+)
+
+print(evaluasi_nested_gwnbr)
+
+# M5. Tabel bandwidth setiap fold
+hasil_bandwidth_nested <- data.frame(
+  Fold = seq_len(n_obs),
+  Kabupaten_Diuji = df_model$Kabupaten,
+  Bandwidth_Adaptive = hasil_nested_ad$bandwidth,
+  AICc_Adaptive = hasil_nested_ad$AICc,
+  Status_Adaptive = hasil_nested_ad$status,
+  Bandwidth_Gaussian_m = hasil_nested_ga$bandwidth,
+  AICc_Gaussian = hasil_nested_ga$AICc,
+  Status_Gaussian = hasil_nested_ga$status
+)
+
+print(hasil_bandwidth_nested)
+
+# M6. Tabel prediksi Nested LOOCV
+hasil_prediksi_nested <- data.frame(
+  Kabupaten = df_model$Kabupaten,
+  Aktual = Y_vec,
+  Prediksi_Adaptive = hasil_nested_ad$prediksi,
+  Prediksi_Gaussian = hasil_nested_ga$prediksi,
+  Theta_Adaptive = hasil_nested_ad$theta,
+  Theta_Gaussian = hasil_nested_ga$theta
+)
+
+# 1. Bersihkan spasi liar dan samakan tipe data pada kolom kunci 'Kabupaten'
+df_04_lengkap <- df_04_lengkap %>%mutate(Kabupaten = as.character(trimws(Kabupaten)))
+
+geo_data <- geo_data %>%mutate(Kabupaten = as.character(trimws(Kabupaten)))
+
+# 2. Lakukan gabungan data (left_join)
+geo_data <- geo_data %>%left_join(df_04_lengkap, by = "Kabupaten")
+
+# 3. Tentukan daftar nama variabel koefisien
+variabel_x <- c("Beta_X1", "Beta_X2", "Beta_X3", "Beta_X4", "Beta_X5")
+
+# 4. Validasi Keberadaan Kolom (Pencegah Error geom_sf)
+missing_cols <- setdiff(variabel_x, colnames(geo_data))
+if (length(missing_cols) > 0) {
+  stop(paste("Gagal Join! Kolom berikut tidak ditemukan di geo_data:", 
+             paste(missing_cols, collapse = ", "),
+             "\nPeriksa apakah nama Kabupaten di geo_data dan df_04_lengkap sudah persis sama."))
+}
+
+# 5. Looping Pembuatan Peta
+for (i in seq_along(variabel_x)) {
+  
+  kolom <- variabel_x[i]
+  peta_koefisien <- ggplot() +
+    # Layer 1: Peta Utama
+    geom_sf(
+      data = geo_data,
+      aes(fill = .data[[kolom]]), 
+      color = "grey20", 
+      linewidth = 0.3
+    ) +
+    # Layer 2: Label Teks Nama Daerah (tanpa titik)
+    geom_text(
+      data = label_points,
+      aes(x = lon, y = lat, label = nama_label),
+      color = "black",
+      fontface = "bold",
+      size = 3.2,
+      check_overlap = TRUE
+    ) +
+    # Layer 3: Skala Warna Divergen (Dikunci -0.02 s.d 0.02)
+    scale_fill_gradient2(
+      low = "#2166AC",            # Biru (Negatif)
+      mid = "white",              # Putih (Nol)
+      high = "#B2182B",           # Merah (Positif)
+      midpoint = 0,
+      limits = c(-0.02, 0.02),    # Dikunci -0.02 s.d 0.02
+      oob = scales::squish,       # Nilai > 0.02 tetap merah pekat, < -0.02 tetap biru pekat
+      name = "Local coefficient",
+      guide = guide_colorbar(
+        barheight = unit(4.5, "cm"),
+        barwidth = unit(0.5, "cm"),
+        frame.colour = "black",
+        ticks.colour = "black"
+      )
+    ) +
+    # Layer 4: Kompas (North Arrow) Kanan Atas
+    annotation_north_arrow(
+      location = "tr",
+      which_north = "true",
+      style = north_arrow_fancy_orienteering(
+        text_size = 12,
+        line_width = 1.2
+      ),
+      height = grid::unit(1.8, "cm"),
+      width = grid::unit(1.8, "cm"),
+      pad_x = unit(0.5, "cm"),
+      pad_y = unit(0.5, "cm")
+    ) +
+    # Layer 5: Skala Jarak Kiri Bawah (Dipindah ke Kiri Bawah agar Kanan Bawah fokus untuk legenda)
+    annotation_scale(
+      location = "bl", # Bottom Left
+      width_hint = 0.2,
+      line_width = 1,
+      text_cex = 0.8,
+      style = "ticks",
+      pad_x = unit(0.5, "cm"),
+      pad_y = unit(0.5, "cm")
+    ) +
+    # Layer 6: Batas Koordinat Zoom-In
+    coord_sf(
+      xlim = c(110.8, 116.1),
+      ylim = c(-8.9, -6.3),
+      expand = FALSE
+    ) +
+    labs(x = NULL, y = NULL) +
+    # Layer 7: Tema Peta
+    theme_minimal() +
+    theme(
+      panel.background = element_rect(fill = "#F4F7F9", color = "black", linewidth = 0.8),
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.grid.major = element_line(color = "white", linewidth = 0.5),
+      panel.grid.minor = element_blank(),
+      
+      # LEGENDA DI DALAM PETA (Kanan Bawah / Sebelah Banyuwangi)
+      legend.position = c(0.85, 0.25),
+      legend.justification = c(0.5, 0.5),
+      legend.background = element_rect(fill = alpha("white", 0.9), color = "grey70", linewidth = 0.5),
+      legend.margin = margin(6, 6, 6, 6),
+      legend.title = element_text(size = 9.5, face = "bold"),
+      legend.text = element_text(size = 8.5),
+      
+      axis.text = element_text(size = 8, color = "black"),
+      axis.ticks = element_line(color = "black"),
+      axis.ticks.length = unit(0.15, "cm")
+    )
+  
+  # Menyimpan gambar
+  nama_file <- sprintf("04_Peta_Koefisien_GWNBR_%s.png", toupper(kolom))
+  
+  ggsave(filename = file.path(folder_peta_c, nama_file),plot = peta_koefisien,
+         width = 12,height = 7,dpi = 300,bg = "white"
+  )
+}
+
+# M7. Pemeriksaan fold yang gagal
+cat("\nStatus Nested LOOCV Adaptive Bisquare:\n")
+print(table(hasil_nested_ad$status))
+
+cat("\nStatus Nested LOOCV Fixed Gaussian:\n")
+print(table(hasil_nested_ga$status))
 
 # ---- N. Tabel GWNBR untuk peta (dari hasil bagian F, tanpa estimasi ulang) ----
 hasil_gwnbr <- data.frame(
@@ -1036,180 +1964,264 @@ hasil_gwnbr <- data.frame(
   setNames(as.data.frame(unname(se_mat)),           paste0("SE_",   coef_names)),
   Prediksi  = y_hat_gwnbr)
 
-# ---- O. Peta ----
-ukuran_label <- 2.0
-elemen_peta <- list(
-  annotation_north_arrow(location = "tr", which_north = "true",
-                         style = north_arrow_fancy_orienteering,
-                         height = grid::unit(0.9, "cm"), width = grid::unit(0.9, "cm")),
-  annotation_scale(location = "bl", width_hint = 0.25, text_cex = 0.7,
-                   line_width = 0.6, unit_category = "metric"),
-  labs(x = "Longitude", y = "Latitude"),
-  coord_sf(expand = FALSE))
-
-tema_peta <- theme_minimal() +
-  theme(aspect.ratio = 5/7, legend.position = "right",
-        axis.title = element_text(size = 10), axis.text = element_text(size = 8),
-        panel.grid.major = element_line(color = "grey90", linetype = "dashed", linewidth = 0.1),
-        panel.grid.minor = element_blank(),
-        plot.background  = element_rect(fill = "white", color = NA),
-        panel.background = element_rect(fill = "white", color = NA))
-
-buat_label_points <- function(data) {
-  st_transform(data, 32749) %>%
-    dplyr::select(Kabupaten, nama, geometry) %>%
-    st_cast("POLYGON") %>%
-    mutate(luas = as.numeric(st_area(geometry))) %>%
-    group_by(Kabupaten, nama) %>%
-    slice_max(order_by = luas, n = 1, with_ties = FALSE) %>%
-    ungroup() %>%
-    mutate(nama_label = ifelse(grepl("^Kabupaten ", nama), sub("^Kabupaten ", "", nama), nama)) %>%
-    st_point_on_surface() %>%
-    st_transform(st_crs(data))}
-
-peta_gwnbr <- geo_data %>%
-  left_join(hasil_gwnbr %>% dplyr::select(Kabupaten, Beta_X1, Beta_X2, Beta_X3, Beta_X4, Beta_X5),
-            by = "Kabupaten")
-
-buat_peta_koef <- function(data, variabel, nama_file) {
-  label_points <- buat_label_points(data)
-  batas <- max(abs(range(data[[variabel]], na.rm = TRUE)))
-  p <- ggplot(data) +
-    geom_sf(aes(fill = .data[[variabel]]), color = "grey25", linewidth = 0.45) +
-    geom_sf_text(data = label_points, aes(label = nama_label, geometry = geometry),
-                 stat = "sf_coordinates", color = "black", fontface = "bold",
-                 size = ukuran_label, check_overlap = TRUE) +
-    scale_fill_gradient2(name = "Local coefficient", low = "#2166AC", mid = "white",
-                         high = "#B2182B", midpoint = 0, limits = c(-batas, batas),
-                         na.value = "grey85",
-                         guide = guide_colorbar(barheight = grid::unit(6, "cm"),
-                                                barwidth = grid::unit(0.5, "cm"))) +
-    elemen_peta + tema_peta
-  ggsave(file.path(folder_peta_c, nama_file), plot = p, width = 12, height = 7, dpi = 300, bg = "white")
-  p}
-for (v in 1:5) buat_peta_koef(peta_gwnbr, paste0("Beta_X", v), paste0("Peta_Koefisien_X", v, ".png"))
-
-rentang_koef <- sapply(paste0("Beta_X", 1:5), function(v) range(peta_gwnbr[[v]], na.rm = TRUE))
-rownames(rentang_koef) <- c("Min", "Max")
-print(round(t(rentang_koef), 4))
-
-buat_peta_signif <- function(no_var, nama_file) {
-  beta <- paste0("Beta_X", no_var); se <- paste0("SE_X", no_var)
-  hasil_signif <- hasil_gwnbr %>%
-    mutate(Z = .data[[beta]] / .data[[se]], P = 2 * pnorm(-abs(Z)),
-           Signif = ifelse(P < 0.05, "Significant", "Not Significant")) %>%
-    dplyr::select(Kabupaten, Signif)
-  peta_signif <- geo_data %>% left_join(hasil_signif, by = "Kabupaten")
-  cat("\nX", no_var, ":\n", sep = ""); print(table(peta_signif$Signif))
-  label_points <- buat_label_points(peta_signif)
-  p <- ggplot(peta_signif) +
-    geom_sf(aes(fill = Signif), color = "grey25", linewidth = 0.45) +
-    geom_sf_text(data = label_points, aes(label = nama_label, geometry = geometry),
-                 stat = "sf_coordinates", color = "black", fontface = "bold",
-                 size = ukuran_label, check_overlap = TRUE) +
-    scale_fill_manual(values = c("Significant" = "red", "Not Significant" = "grey85"),
-                      breaks = c("Significant", "Not Significant"), name = "Local significance") +
-    elemen_peta + tema_peta
-  ggsave(file.path(folder_peta_s, nama_file), plot = p, width = 12, height = 7, dpi = 300, bg = "white")
-  p}
-peta_signifikansi_X2 <- buat_peta_signif(2, "Peta_Signifikansi_X2_GWNBR.png")
-peta_signifikansi_X4 <- buat_peta_signif(4, "Peta_Signifikansi_X4_GWNBR.png")
 
 # ---- P. UJI MONTE CARLO NON-STASIONERITAS KOEFISIEN GWNBR ----
 set.seed(123)
+
 B <- 999
 
 nama_beta      <- colnames(X_mat)
 nama_prediktor <- nama_beta[-1]
 
-beta_obs <- as.matrix(hasil_gwnbr[, paste0("Beta_", coef_names)])
+# ---- P1. Varians koefisien lokal aktual ----
+beta_obs <- as.matrix(
+  hasil_gwnbr[, paste0("Beta_", coef_names)]
+)
+
 colnames(beta_obs) <- nama_beta
-if (any(!is.finite(beta_obs))) stop("Koefisien lokal aktual mengandung nilai tidak valid.")
+
+if (any(!is.finite(beta_obs))) {
+  stop("Koefisien lokal aktual mengandung nilai tidak valid.")
+}
+
 var_obs <- apply(beta_obs, 2, stats::var)
 
-# Matriks bobot dihitung sekali (bw_opt tetap)
-W_opt <- do.call(rbind, lapply(seq_len(n_obs), function(i) bobot_adaptif(dist_matrix[i, ], bw_opt)))
 
+# ---- P2. Matriks bobot Adaptive Bisquare ----
+W_opt <- do.call(
+  rbind,
+  lapply(
+    seq_len(n_obs),
+    function(i) bobot_adaptif(dist_matrix[i, ], bw_opt)
+  )
+)
+
+if (any(!is.finite(W_opt)) || any(rowSums(W_opt) <= 0)) {
+  stop("Matriks bobot Adaptive Bisquare tidak valid.")
+}
+
+
+# ---- P3. Fungsi estimasi varians koefisien lokal ----
 hitung_var_lokal <- function(Y_input, theta_input, beta_start) {
+  
   p <- ncol(X_mat)
-  beta_sim <- matrix(NA_real_, nrow = n_obs, ncol = p)
+  
+  beta_sim <- matrix(
+    NA_real_,
+    nrow = n_obs,
+    ncol = p
+  )
+  
   for (i in seq_len(n_obs)) {
+    
     fit_i <- tryCatch(
-      fit_gwnbr_local(X_mat, Y_input, off_vec, theta_input, W_opt[i, ], beta_start),
-      error = function(e) NULL)
-    if (is.null(fit_i) || !isTRUE(fit_i$konvergen) ||
-        length(fit_i$beta) != p || any(!is.finite(fit_i$beta))) return(NULL)
+      fit_gwnbr_local(
+        X_mat,
+        Y_input,
+        off_vec,
+        theta_input,
+        W_opt[i, ],
+        beta_start
+      ),
+      error = function(e) NULL
+    )
+    
+    if (is.null(fit_i) ||
+        !isTRUE(fit_i$konvergen) ||
+        length(fit_i$beta) != p ||
+        any(!is.finite(fit_i$beta))) {
+      return(NULL)
+    }
+    
     beta_sim[i, ] <- as.numeric(fit_i$beta)
   }
-  apply(beta_sim, 2, stats::var)}
+  
+  apply(beta_sim, 2, stats::var)
+}
 
+# ---- P4. Persiapan simulasi di bawah H0 ----
 data_sim <- df_model[, c("X1", "X2", "X3", "X4", "X5")]
 data_sim$offset_sim <- off_vec
-formula_sim <- Y ~ X1 + X2 + X3 + X4 + X5 + offset(offset_sim)
 
-mu_h0   <- as.numeric(exp(X_mat %*% beta_global + off_vec))
-var_sim <- matrix(NA_real_, nrow = B, ncol = ncol(X_mat), dimnames = list(NULL, nama_beta))
-gagal   <- 0L
+formula_sim <- Y ~ X1 + X2 + X3 + X4 + X5 +
+  offset(offset_sim)
+
+eta_h0 <- as.numeric(
+  X_mat %*% beta_global + off_vec
+)
+
+mu_h0 <- exp(pmin(pmax(eta_h0, -20), 20))
+
+if (any(!is.finite(mu_h0)) || any(mu_h0 <= 0)) {
+  stop("Nilai mean simulasi di bawah H0 tidak valid.")
+}
+
+# ---- P5. Proses simulasi Monte Carlo ----
+var_sim <- matrix(
+  NA_real_,
+  nrow = B,
+  ncol = ncol(X_mat),
+  dimnames = list(NULL, nama_beta)
+)
+
+gagal <- 0L
 
 for (b in seq_len(B)) {
-  Y_sim <- MASS::rnegbin(n = n_obs, mu = mu_h0, theta = theta_global)
+  
+  Y_sim <- MASS::rnegbin(
+    n = n_obs,
+    mu = mu_h0,
+    theta = theta_global
+  )
+  
   data_sim$Y <- Y_sim
   
+  # Estimasi ulang NBR global pada setiap simulasi
   fit_nbr_sim <- tryCatch(
-    suppressWarnings(MASS::glm.nb(formula_sim, data = data_sim, control = glm.control(maxit = 100))),
-    error = function(e) NULL)
-  if (is.null(fit_nbr_sim)) { gagal <- gagal + 1L; next }
+    suppressWarnings(
+      MASS::glm.nb(
+        formula_sim,
+        data = data_sim,
+        control = glm.control(maxit = 100)
+      )
+    ),
+    error = function(e) NULL
+  )
   
-  beta_start_sim <- coef(fit_nbr_sim)
-  theta_sim      <- fit_nbr_sim$theta
-  if (any(!is.finite(beta_start_sim)) || !is.finite(theta_sim) || theta_sim <= 0) {
-    gagal <- gagal + 1L; next
+  if (is.null(fit_nbr_sim)) {
+    gagal <- gagal + 1L
+    next
   }
   
-  v_sim <- hitung_var_lokal(Y_sim, theta_sim, beta_start_sim)
-  if (is.null(v_sim) || any(!is.finite(v_sim))) { gagal <- gagal + 1L; next }
+  beta_start_sim <- coef(fit_nbr_sim)
+  theta_sim <- fit_nbr_sim$theta
+  
+  if (any(!is.finite(beta_start_sim)) ||
+      !is.finite(theta_sim) ||
+      theta_sim <= 0) {
+    gagal <- gagal + 1L
+    next
+  }
+  
+  # Estimasi koefisien lokal GWNBR
+  v_sim <- hitung_var_lokal(
+    Y_sim,
+    theta_sim,
+    beta_start_sim
+  )
+  
+  if (is.null(v_sim) || any(!is.finite(v_sim))) {
+    gagal <- gagal + 1L
+    next
+  }
   
   var_sim[b, ] <- v_sim
-  if (b %% 50 == 0) cat("Simulasi selesai:", b, "dari", B, "\n")}
-cat("Simulasi gagal:", gagal, "dari", B, "\n")
+  
+  if (b %% 50 == 0) {
+    cat(
+      "Simulasi selesai:",
+      b, "dari", B, "\n"
+    )
+  }
+}
 
-p_mc <- setNames(rep(NA_real_, ncol(X_mat)), nama_beta)
+jumlah_valid <- colSums(is.finite(var_sim))
+
+cat(
+  "\nSimulasi gagal:",
+  gagal, "dari", B, "\n"
+)
+
+cat(
+  "Simulasi valid:",
+  B - gagal, "dari", B, "\n"
+)
+
+if (B - gagal == 0) {
+  stop("Seluruh simulasi gagal.")
+}
+
+# ---- P6. Menghitung p-value Monte Carlo ----
+p_mc <- setNames(
+  rep(NA_real_, ncol(X_mat)),
+  nama_beta
+)
+
 for (j in seq_len(ncol(X_mat))) {
-  v <- var_sim[, j]; v <- v[is.finite(v)]
-  if (length(v) > 0) p_mc[j] <- (1 + sum(v >= var_obs[j])) / (length(v) + 1)}
-p_bh <- setNames(rep(NA_real_, ncol(X_mat)), nama_beta)
-p_bh[nama_prediktor] <- p.adjust(p_mc[nama_prediktor], method = "BH")
+  
+  v <- var_sim[, j]
+  v <- v[is.finite(v)]
+  
+  if (length(v) > 0) {
+    p_mc[j] <- (
+      1 + sum(v >= var_obs[j])
+    ) / (length(v) + 1)
+  }
+}
+
+# ---- P7. Koreksi Benjamini-Hochberg ----
+p_bh <- setNames(
+  rep(NA_real_, ncol(X_mat)),
+  nama_beta
+)
+
+p_bh[nama_prediktor] <- p.adjust(
+  p_mc[nama_prediktor],
+  method = "BH"
+)
+
+# ---- P8. Ringkasan hasil Monte Carlo ----
+rata_var_sim <- apply(
+  var_sim,
+  2,
+  function(x) {
+    if (all(!is.finite(x))) {
+      return(NA_real_)
+    }
+    mean(x, na.rm = TRUE)
+  }
+)
 
 hasil_mc <- data.frame(
-  Variabel          = nama_beta,
+  Variabel = nama_beta,
   Varians_Observasi = as.numeric(var_obs),
-  Rata2_Varians_Sim = colMeans(var_sim, na.rm = TRUE),
-  Simulasi_Valid    = colSums(is.finite(var_sim)),
-  P_Monte_Carlo     = as.numeric(p_mc),
-  P_BH              = as.numeric(p_bh),
-  Kesimpulan        = ifelse(!is.na(p_bh) & p_bh < 0.05,
-                             "Variasi spasial signifikan", "Belum ada bukti variasi spasial"))
+  Rata2_Varians_Sim = as.numeric(rata_var_sim),
+  Simulasi_Valid = as.numeric(jumlah_valid),
+  P_Monte_Carlo = as.numeric(p_mc),
+  P_BH = as.numeric(p_bh),
+  Kesimpulan = ifelse(
+    !is.na(p_bh) & p_bh < 0.05,
+    "Variasi spasial signifikan",
+    "Belum ada bukti variasi spasial"
+  )
+)
+
+print(hasil_mc)
 
 # ---- Q. Ekspor Tahap 4 ----
 wb_04 <- createWorkbook()
 hasil_sheet <- list(
-  "Pemilihan Bandwidth"   = tabel_bandwidth,
-  "Profil AICc Adaptive"  = profil_aicc_adaptive,
-  "Profil AICc Gaussian"  = profil_aicc_gauss,
-  "Evaluasi Lengkap"      = df_11_evaluasi,
-  "Evaluasi LOOCV bw tetap" = evaluasi_loocv_gwnbr,
-  "AIC AICc Perbandingan" = tabel_aicc_gwnbr,
-  "Koreksi Uji Ganda"     = tabel_koreksi,
-  "Ringkasan Koefisien"   = df_05_ringkas,
-  "Jumlah Signifikansi"   = df_06_jumlah_sig,
-  "Arah Koefisien"        = df_07_arah_peng,
-  "Tabel per Daerah"      = df_04_lengkap,
+  "Pemilihan Bandwidth" = tabel_bandwidth,
+  "Profil AICc Adaptive" = profil_aicc_adaptive,
+  "Profil AICc Gaussian" = profil_aicc_gauss,
+  "Evaluasi In Sample" = df_11_evaluasi,
+  "Evaluasi LOOCV bw Tetap" = evaluasi_nested_gwnbr,
+  "Perbandingan AIC AICc" = tabel_aicc_gwnbr,
+  "Koreksi Uji Ganda" = tabel_koreksi,
+  "Ringkasan Koefisien" = df_05_ringkas,
+  "Jumlah Signifikansi" = df_06_jumlah_sig,
+  "Arah Koefisien" = df_07_arah_peng,
+  "Tabel Koefisien Lokal" = df_04_lengkap,
   "Kelompok Signifikansi" = df_kelompok_sig,
-  "Monte Carlo GWNBR"     = hasil_mc)
+  "Monte Carlo GWNBR" = hasil_mc
+)
+
 for (nm in names(hasil_sheet)) {
-  addWorksheet(wb_04, nm); writeData(wb_04, sheet = nm, x = hasil_sheet[[nm]])
-}
-saveWorkbook(wb_04, file.path(folder_out_04, "04_Laporan_Hasil_GWNBR.xlsx"), overwrite = TRUE)
+  addWorksheet(wb_04, nm)
+  writeData(wb_04,sheet = nm,x = hasil_sheet[[nm]])}
+
+saveWorkbook(wb_04,file.path(folder_out_04,"04_Laporan_Hasil_GWNBR.xlsx"),
+  overwrite = TRUE)
 
 # ============================================================
 # TAHAP 5 & 6: XGBOOST NESTED LOOCV & SHAP
@@ -1228,13 +2240,15 @@ stopifnot(n_xgb == length(y_vector), n_xgb == length(offset_log),
           all(is.finite(X_matrix)), all(is.finite(y_vector)),
           all(is.finite(offset_log)), all(y_vector >= 0))
 
-grid_xgb <- expand.grid(eta = c(0.03, 0.05, 0.10), max_depth = c(2, 3), min_child_weight = c(1, 3))
-stopifnot(nrow(grid_xgb) == 12)
+grid_xgb <- expand.grid(eta = c(0.03, 0.05, 0.10),
+                        max_depth = c(2, 3),
+                        max_delta_step = c(0.3, 0.7, 1.0))
+stopifnot(nrow(grid_xgb) == 18)
 
 buat_params <- function(row) {
   list(booster = "gbtree", objective = "count:poisson", eval_metric = "rmse",
        eta = as.numeric(row$eta), max_depth = as.integer(row$max_depth),
-       min_child_weight = as.numeric(row$min_child_weight),
+       max_delta_step = as.numeric(row$max_delta_step),
        subsample = 0.70, colsample_bytree = 0.70,
        nthread = 1, seed = 123)   # seed xgboost agar subsampling dapat direproduksi
   }
@@ -1254,7 +2268,7 @@ tune_internal <- function(idx_train) {
     log_cv   <- cv_g$evaluation_log
     idx_best <- which.min(log_cv$test_rmse_mean)
     hasil[[g]] <- data.frame(eta = grid_xgb$eta[g], max_depth = grid_xgb$max_depth[g],
-                             min_child_weight = grid_xgb$min_child_weight[g],
+                             max_delta_step = grid_xgb$max_delta_step[g],
                              subsample = 0.70, colsample_bytree = 0.70,
                              best_nrounds = idx_best,
                              inner_CV_RMSE = log_cv$test_rmse_mean[idx_best])}
@@ -1286,7 +2300,7 @@ for (i in seq_len(n_xgb)) {
   pred_outer[i] <- as.numeric(predict(model_i, dtest_outer))   # skala jumlah kasus
   
   parameter_outer[[i]] <- data.frame(fold = i, eta = best_i$eta, max_depth = best_i$max_depth,
-                                     min_child_weight = best_i$min_child_weight,
+                                     max_delta_step = best_i$max_delta_step,
                                      subsample = best_i$subsample,
                                      colsample_bytree = best_i$colsample_bytree,
                                      nrounds = nrounds_i, inner_CV_RMSE = best_i$inner_CV_RMSE)
@@ -1294,11 +2308,39 @@ for (i in seq_len(n_xgb)) {
 stopifnot(all(is.finite(pred_outer)))
 
 hasil_eval_nested     <- hitung_evaluasi(y_vector, pred_outer)
+hasil_eval_nested <- data.frame(
+  R2   = as.numeric(hasil_eval_nested["R2"]),
+  RMSE = as.numeric(hasil_eval_nested["RMSE"]),
+  MAE  = as.numeric(hasil_eval_nested["MAE"])
+)
 hasil_parameter_outer <- do.call(rbind, parameter_outer)
 hasil_tuning_outer    <- do.call(rbind, tuning_outer)
 df_01_pred_xgb <- data.frame(Kabupaten = df_model$Kabupaten, Y_Aktual = y_vector,
                              Y_Prediksi_Nested_LOOCV = pred_outer,
                              Residual = y_vector - pred_outer)
+
+# Frekuensi kombinasi hyperparameter pada 38 outer folds
+frekuensi_parameter <- hasil_parameter_outer %>%
+  count(eta, max_depth, max_delta_step, name = "Frekuensi")
+
+# Memasukkan kombinasi yang tidak pernah terpilih (frekuensi = 0)
+tabel_frekuensi <- grid_xgb %>%
+  left_join(
+    frekuensi_parameter,
+    by = c("eta", "max_depth", "max_delta_step")
+  ) %>%
+  mutate(
+    Frekuensi = tidyr::replace_na(Frekuensi, 0L),
+    Persentase = Frekuensi / n_xgb * 100
+  ) %>%
+  arrange(desc(Frekuensi), eta, max_depth, max_delta_step)
+
+ringkasan_inner_cv <- data.frame(
+  Mean_RMSE = mean(hasil_parameter_outer$inner_CV_RMSE),
+  SD_RMSE = sd(hasil_parameter_outer$inner_CV_RMSE),
+  Min_RMSE = min(hasil_parameter_outer$inner_CV_RMSE),
+  Max_RMSE = max(hasil_parameter_outer$inner_CV_RMSE)
+)
 
 # Model final (seluruh data) khusus untuk interpretasi SHAP.
 # Metrik performa tetap dari nested LOOCV.
@@ -1321,8 +2363,6 @@ xgb_final <- xgb.train(
   verbose = 0)
 
 # ---- SHAP (kontribusi pada skala prediksi mentah / log, bukan efek kausal) ----
-shp <- shapviz(xgb_final, X_pred = X_matrix)
-
 nama_variabel <- c(
   X1 = "Poor population (%)",
   X2 = "non-PBI BPJS Health participants (%)",
@@ -1330,7 +2370,15 @@ nama_variabel <- c(
   X4 = "Population density (1,000 persons/km2)",
   X5 = "community health centers (puskesmas)(Per 100,000 residents)")
 
-shap_mat <- shapviz::get_shap_values(shp)
+# SHAP dengan base_margin yang sama seperti model training
+dmat_shap <- xgb.DMatrix(data = X_matrix,base_margin = offset_log)
+shap_contrib <- predict(xgb_final,newdata = dmat_shap,predcontrib = TRUE)
+
+# Mengambil kontribusi kelima variabel (tanpa BIAS)
+shap_mat <- shap_contrib[, features, drop = FALSE]
+
+# Membentuk objek shapviz
+shp <- shapviz::shapviz(shap_mat,X = as.data.frame(X_matrix))
 df_importance <- data.frame(Variabel = features,Label = unname(nama_variabel[features]),
                             Mean_Abs_SHAP = colMeans(abs(shap_mat))) %>%arrange(desc(Mean_Abs_SHAP))
 p_imp <- sv_importance(shp, kind = "bar") +scale_y_discrete(labels = nama_variabel) +
@@ -1347,13 +2395,104 @@ p_beeswarm <- sv_importance(shp, kind = "beeswarm") +scale_y_discrete(labels = n
 ggsave(file.path(folder_out_06, "02_SHAP_Beeswarm.png"),p_beeswarm, width = 12, height = 8,
        units = "in", dpi = 300, bg = "white")
 
+# BOOTSTRAP SHAP STABILITY
+set.seed(123)
+B <- 500
+
+# DMatrix untuk menghitung SHAP pada data referensi yang sama
+dmat_reference <- xgb.DMatrix(
+  data = X_matrix,
+  base_margin = offset_log
+)
+
+hasil_shap_boot <- vector("list", B)
+
+for (b in seq_len(B)) {
+  
+  cat("Bootstrap", b, "dari", B, "\n")
+  
+  # Bootstrap sample
+  idx_boot <- sample(
+    seq_len(n_xgb),
+    size = n_xgb,
+    replace = TRUE
+  )
+  
+  dtrain_boot <- xgb.DMatrix(
+    data = X_matrix[idx_boot, , drop = FALSE],
+    label = y_vector[idx_boot],
+    base_margin = offset_log[idx_boot]
+  )
+  
+  # Seed berbeda untuk setiap refit
+  params_boot <- params_clean
+  params_boot$seed <- 1000 + b
+  
+  # Refit model dengan konfigurasi final yang sama
+  model_boot <- xgb.train(
+    params = params_boot,
+    data = dtrain_boot,
+    nrounds = nrounds_final,
+    verbose = 0
+  )
+  
+  # SHAP pada 38 observasi referensi yang sama
+  shap_boot <- predict(model_boot,
+    newdata = dmat_reference,
+    predcontrib = TRUE
+  )
+  
+  shap_boot <- shap_boot[, features, drop = FALSE]
+  
+  # Mean absolute SHAP setiap variabel
+  importance_boot <- colMeans(abs(shap_boot))
+  
+  # Ranking (1 = paling penting)
+  rank_boot <- rank(
+    -importance_boot,
+    ties.method = "average"
+  )
+  
+  hasil_shap_boot[[b]] <- data.frame(
+    Bootstrap = b,
+    Variabel = features,
+    Mean_Abs_SHAP = as.numeric(importance_boot),
+    Rank = as.numeric(rank_boot)
+  )
+}
+
+# Gabungkan seluruh hasil bootstrap
+df_shap_boot <- do.call(rbind, hasil_shap_boot)
+
+# Pastikan seluruh 500 bootstrap berhasil
+stopifnot(length(unique(df_shap_boot$Bootstrap)) == B)
+stopifnot(nrow(df_shap_boot) == B * length(features))
+
+ringkasan_shap_boot <- df_shap_boot %>%
+  group_by(Variabel) %>%
+  summarise(
+    Rata_Abs_SHAP = mean(Mean_Abs_SHAP, na.rm = TRUE),
+    SD_Abs_SHAP = sd(Mean_Abs_SHAP, na.rm = TRUE),
+    Mean_Rank = mean(Rank, na.rm = TRUE),
+    SD_Rank = sd(Rank, na.rm = TRUE),
+    Frekuensi_Rank_1 = sum(Rank == 1, na.rm = TRUE),
+    Persentase_Rank_1 = mean(Rank == 1, na.rm = TRUE) * 100,
+    .groups = "drop"
+  ) %>%
+  rename(Mean_Abs_SHAP = Rata_Abs_SHAP) %>%
+  arrange(Mean_Rank)
+
 openxlsx::write.xlsx(
   list(Prediksi_Nested_LOOCV = df_01_pred_xgb,
        Evaluasi_Nested_LOOCV = hasil_eval_nested,
        Parameter_Outer_Fold  = hasil_parameter_outer,
        Tuning_Inner_Fold     = hasil_tuning_outer,
        Tuning_Model_Final    = df_tuning_final,
-       Feature_Importance    = df_importance),
+       Feature_Importance    = df_importance,
+       ringkasan_inner_cv    = ringkasan_inner_cv,
+       tabel_frekuensi       = tabel_frekuensi,
+       Bootstrap_SHAP        = df_shap_boot,
+       Ringkasan_Stabilitas_SHAP = ringkasan_shap_boot),
   file.path(folder_out_05, "05_Laporan_Hasil_XGBoost.xlsx"), overwrite = TRUE)
 
 # ============================================================
@@ -1448,99 +2587,369 @@ model_nbr_lso <- MASS::glm.nb(formula_nbr,data = df_lso)
 theta_lso <- as.numeric(model_nbr_lso$theta)
 beta_lso_global <- as.numeric(coef(model_nbr_lso))
 
-# C2. Pemilihan bandwidth ulang menggunakan AICc
-min_k_lso <- n_vars_lso + 3
-k_range_lso <- min_k_lso:n_lso
+## C2. Pemilihan bandwidth GWNBR pada 37 wilayah
 
-profil_aicc_lso <- data.frame(k = k_range_lso,EDF = NA_real_,K_eff = NA_real_,
-                              LogLik = NA_real_,AIC = NA_real_,AICc = NA_real_)
+# Estimasi NBR awal pada seluruh data LSO
+nbr_lso <- estimasi_nbr_awal(X = X_lso,Y = Y_lso,offset_val = off_lso)
 
-for (j in seq_along(k_range_lso)) {
-  
-  k <- k_range_lso[j]
-  
-  hasil_ic <- hitung_ic_gwnbr(
-    W_fun = function(i) bobot_adaptif(dist_lso[i, ], k),
-    X = X_lso,
-    Y = Y_lso,
-    offset_val = off_lso,
-    theta = theta_lso,
-    beta_start = beta_lso_global
+theta_lso <- nbr_lso$theta
+beta_start_lso <- nbr_lso$beta_start
+
+# 1. ADAPTIVE BISQUARE
+min_k_lso <- ncol(X_lso) + 3
+
+# Maksimum k adalah n_lso - 1 karena jarak memuat
+# jarak wilayah terhadap dirinya sendiri (0)
+k_range_lso <- min_k_lso:(n_lso - 1)
+
+hasil_bw_ad_lso <- lapply(k_range_lso, function(k) {
+  tryCatch({
+    hitung_ic_gwnbr(
+      W_fun = function(i) {
+        bobot_adaptif(dist_lso[i, ], k)
+      },
+      X = X_lso,
+      Y = Y_lso,
+      offset_val = off_lso,
+      theta = theta_lso,
+      beta_start = beta_start_lso
+    )
+  }, error = function(e) NULL)
+})
+
+aicc_ad_lso <- sapply(hasil_bw_ad_lso, function(x) {
+  if (is.null(x)) return(Inf)
+  x$AICc
+})
+
+idx_ad_lso <- which.min(aicc_ad_lso)
+
+bw_lso <- k_range_lso[idx_ad_lso]
+aicc_min_ad_lso <- aicc_ad_lso[idx_ad_lso]
+
+# Tabel profil Adaptive Bisquare
+profil_ad_lso <- data.frame(Kernel = "Adaptive Bisquare",Bandwidth = k_range_lso,AICc = aicc_ad_lso)
+# 2. FIXED GAUSSIAN
+# Mengambil jarak antarwilayah tanpa diagonal
+jarak_unik_lso <- dist_lso[upper.tri(dist_lso)]
+jarak_unik_lso <- sort(unique(as.numeric(jarak_unik_lso)))
+jarak_maks_lso <- max(jarak_unik_lso, na.rm = TRUE)
+
+# Kandidat bandwidth dari kuantil jarak dan perluasan
+h_quantile_lso <- as.numeric(
+  quantile(
+    jarak_unik_lso,
+    probs = seq(0.05, 0.95, length.out = 19),
+    na.rm = TRUE
   )
+)
+
+h_extended_lso <- seq(jarak_maks_lso * 1.05,jarak_maks_lso * 32,length.out = 100)
+
+h_candidates_lso <- sort(unique(c(h_quantile_lso,h_extended_lso)))
+
+hasil_bw_ga_lso <- lapply(h_candidates_lso, function(h) {
+  tryCatch({
+    hitung_ic_gwnbr(
+      W_fun = function(i) {
+        bobot_fixed_gaussian(dist_lso[i, ], h)
+      },
+      X = X_lso,
+      Y = Y_lso,
+      offset_val = off_lso,
+      theta = theta_lso,
+      beta_start = beta_start_lso
+    )
+  }, error = function(e) NULL)
+})
+
+aicc_ga_lso <- sapply(hasil_bw_ga_lso, function(x) {
+  if (is.null(x)) return(Inf)
+  x$AICc
+})
+
+idx_ga_lso <- which.min(aicc_ga_lso)
+
+bw_gauss_lso <- h_candidates_lso[idx_ga_lso]
+aicc_min_ga_lso <- aicc_ga_lso[idx_ga_lso]
+
+# Tabel profil Fixed Gaussian
+profil_ga_lso <- data.frame(Kernel = "Fixed Gaussian",Bandwidth = h_candidates_lso,AICc = aicc_ga_lso)
+
+# Gabungkan profil bandwidth
+profil_bw_lso <- rbind(profil_ad_lso,profil_ga_lso)
+
+# Ringkasan bandwidth terpilih
+ringkasan_bw_lso <- data.frame(
+  Kernel = c("Adaptive Bisquare", "Fixed Gaussian"),
+  Bandwidth = c(bw_lso, bw_gauss_lso),
+  Satuan = c("Jumlah tetangga", "Meter"),
+  AICc = c(aicc_min_ad_lso, aicc_min_ga_lso)
+)
+
+## C3. Nested LOOCV GWNBR pada 37 wilayah
+nested_loocv_gwnbr_lso <- function(X, Y, offset_val, dist_mat
+) {
+  n <- nrow(X)
+  hasil_fold <- vector("list", n)
   
-  profil_aicc_lso[j, c("EDF", "K_eff", "LogLik", "AIC", "AICc")] <-
-    unlist(hasil_ic[c("EDF", "K_eff", "LogLik", "AIC", "AICc")])
-}
-
-if (!any(is.finite(profil_aicc_lso$AICc))) {stop("Tidak ada bandwidth GWNBR yang menghasilkan AICc valid.")}
-
-idx_bw_lso <- which.min(profil_aicc_lso$AICc)
-bw_lso <- profil_aicc_lso$k[idx_bw_lso]
-
-cat("Bandwidth GWNBR tanpa Surabaya:", bw_lso, "\n")
-cat("AICc minimum:", profil_aicc_lso$AICc[idx_bw_lso], "\n")
-
-write.csv(profil_aicc_lso,file.path(folder_out_07, "Profil_AICc_GWNBR_LSO.csv"),row.names = FALSE)
-
-# C3. Fungsi LOOCV GWNBR dengan bandwidth hasil seleksi 37 wilayah
-pred_gwnbr_lso <- rep(NA_real_, n_lso)
-theta_gwnbr_fold <- rep(NA_real_, n_lso)
-
-for (i in seq_len(n_lso)) {
-  idx_train <- setdiff(seq_len(n_lso), i)
-  
-  # Estimasi ulang NBR pada 36 wilayah
-  fit_nbr_i <- tryCatch(
-    suppressWarnings(MASS::glm.nb(formula_nbr,data = df_lso[idx_train, , drop = FALSE])),
-    error = function(e) NULL)
-  
-  if (is.null(fit_nbr_i) ||
-      !is.finite(fit_nbr_i$theta) ||
-      fit_nbr_i$theta <= 0 ||
-      any(!is.finite(coef(fit_nbr_i)))) {
-    next
+  for (i in seq_len(n)) {
+    cat("Nested LOOCV GWNBR LSO - Fold", i, "dari", n, "\n")
+    
+    # 1. Membagi data training dan testing
+    idx_train <- setdiff(seq_len(n), i)
+    
+    X_train <- X[idx_train, , drop = FALSE]
+    Y_train <- Y[idx_train]
+    off_train <- offset_val[idx_train]
+    
+    # Matriks jarak training saja
+    dist_train <- dist_mat[idx_train, idx_train, drop = FALSE]
+    
+    # Jarak wilayah testing terhadap seluruh training
+    dist_test_train <- dist_mat[i, idx_train]
+    
+    X_test <- X[i, , drop = FALSE]
+    off_test <- offset_val[i]
+    
+    n_train <- nrow(X_train)
+    
+    # 2. Estimasi NBR pada data training
+    nbr_train <- tryCatch(
+      estimasi_nbr_awal(
+        X = X_train,
+        Y = Y_train,
+        offset_val = off_train
+      ),
+      error = function(e) NULL
+    )
+    
+    if (is.null(nbr_train)) {
+      hasil_fold[[i]] <- data.frame(
+        Fold = i,
+        Pred_Adaptive = NA_real_,
+        Pred_Gaussian = NA_real_,
+        BW_Adaptive = NA_real_,
+        BW_Gaussian = NA_real_,
+        AICc_Adaptive = NA_real_,
+        AICc_Gaussian = NA_real_
+      )
+      next
+    }
+    
+    theta_train <- nbr_train$theta
+    beta_start_train <- nbr_train$beta_start
+    
+    # 3. Pemilihan bandwidth Adaptive Bisquare
+    #    hanya menggunakan data training
+    min_k_fold <- ncol(X_train) + 3
+    k_range_fold <- min_k_fold:(n_train - 1)
+    
+    hasil_ad_fold <- lapply(k_range_fold, function(k) {
+      tryCatch({
+        hitung_ic_gwnbr(
+          W_fun = function(j) {
+            bobot_adaptif(dist_train[j, ], k)
+          },
+          X = X_train,
+          Y = Y_train,
+          offset_val = off_train,
+          theta = theta_train,
+          beta_start = beta_start_train
+        )
+      }, error = function(e) NULL)
+    })
+    
+    aicc_ad_fold <- sapply(hasil_ad_fold, function(x) {
+      if (is.null(x)) return(Inf)
+      x$AICc
+    })
+    
+    if (all(!is.finite(aicc_ad_fold))) {
+      hasil_fold[[i]] <- data.frame(
+        Fold = i,
+        Pred_Adaptive = NA_real_,
+        Pred_Gaussian = NA_real_,
+        BW_Adaptive = NA_real_,
+        BW_Gaussian = NA_real_,
+        AICc_Adaptive = NA_real_,
+        AICc_Gaussian = NA_real_
+      )
+      next
+    }
+    
+    idx_ad_fold <- which.min(aicc_ad_fold)
+    bw_ad_fold <- k_range_fold[idx_ad_fold]
+    aicc_ad_fold_min <- aicc_ad_fold[idx_ad_fold]
+    
+    # 4. Pemilihan bandwidth Fixed Gaussian
+    #    hanya menggunakan data training
+    jarak_train <- dist_train[upper.tri(dist_train)]
+    jarak_train <- sort(unique(as.numeric(jarak_train)))
+    jarak_maks_train <- max(jarak_train, na.rm = TRUE)
+    
+    h_quantile_fold <- as.numeric(
+      quantile(
+        jarak_train,
+        probs = seq(0.05, 0.95, length.out = 19),
+        na.rm = TRUE
+      )
+    )
+    
+    h_extended_fold <- seq(
+      jarak_maks_train * 1.05,
+      jarak_maks_train * 32,
+      length.out = 100
+    )
+    
+    h_candidates_fold <- sort(unique(c(
+      h_quantile_fold,
+      h_extended_fold
+    )))
+    
+    hasil_ga_fold <- lapply(h_candidates_fold, function(h) {
+      tryCatch({
+        hitung_ic_gwnbr(
+          W_fun = function(j) {
+            bobot_fixed_gaussian(dist_train[j, ], h)
+          },
+          X = X_train,
+          Y = Y_train,
+          offset_val = off_train,
+          theta = theta_train,
+          beta_start = beta_start_train
+        )
+      }, error = function(e) NULL)
+    })
+    
+    aicc_ga_fold <- sapply(hasil_ga_fold, function(x) {
+      if (is.null(x)) return(Inf)
+      x$AICc
+    })
+    
+    if (all(!is.finite(aicc_ga_fold))) {
+      hasil_fold[[i]] <- data.frame(
+        Fold = i,
+        Pred_Adaptive = NA_real_,
+        Pred_Gaussian = NA_real_,
+        BW_Adaptive = bw_ad_fold,
+        BW_Gaussian = NA_real_,
+        AICc_Adaptive = aicc_ad_fold_min,
+        AICc_Gaussian = NA_real_
+      )
+      next
+    }
+    
+    idx_ga_fold <- which.min(aicc_ga_fold)
+    bw_ga_fold <- h_candidates_fold[idx_ga_fold]
+    aicc_ga_fold_min <- aicc_ga_fold[idx_ga_fold]
+    
+    # 5. Bobot untuk wilayah testing
+    #    testing tidak termasuk dalam data training
+    W_ad_test <- bobot_adaptif_new(
+      dist_test_train,
+      bw_ad_fold
+    )
+    
+    W_ga_test <- bobot_fixed_gaussian(
+      dist_test_train,
+      bw_ga_fold
+    )
+    
+      # 6. Estimasi model lokal Adaptive Bisquare
+    fit_ad_test <- tryCatch(
+      fit_gwnbr_local(
+        X = X_train,
+        Y = Y_train,
+        offset_val = off_train,
+        theta = theta_train,
+        W_i = W_ad_test,
+        beta_start = beta_start_train
+      ),
+      error = function(e) NULL
+    )
+    
+    pred_ad <- NA_real_
+    
+    if (!is.null(fit_ad_test)) {
+      if (all(is.finite(fit_ad_test$beta))) {
+        eta_ad <- sum(X_test * fit_ad_test$beta) + off_test
+        pred_ad <- exp(pmin(pmax(eta_ad, -20), 20))
+      }
+    }
+    
+    # 7. Estimasi model lokal Fixed Gaussian
+    fit_ga_test <- tryCatch(
+      fit_gwnbr_local(
+        X = X_train,
+        Y = Y_train,
+        offset_val = off_train,
+        theta = theta_train,
+        W_i = W_ga_test,
+        beta_start = beta_start_train
+      ),
+      error = function(e) NULL
+    )
+    
+    pred_ga <- NA_real_
+    
+    if (!is.null(fit_ga_test)) {
+      if (all(is.finite(fit_ga_test$beta))) {
+        eta_ga <- sum(X_test * fit_ga_test$beta) + off_test
+        pred_ga <- exp(pmin(pmax(eta_ga, -20), 20))
+      }
+    }
+    
+    # 8. Menyimpan hasil fold
+    hasil_fold[[i]] <- data.frame(
+      Fold = i,
+      Pred_Adaptive = as.numeric(pred_ad),
+      Pred_Gaussian = as.numeric(pred_ga),
+      BW_Adaptive = bw_ad_fold,
+      BW_Gaussian = bw_ga_fold,
+      AICc_Adaptive = aicc_ad_fold_min,
+      AICc_Gaussian = aicc_ga_fold_min
+    )
   }
   
-  theta_i <- as.numeric(fit_nbr_i$theta)
-  beta_i <- as.numeric(coef(fit_nbr_i))
-  
-  # Bobot adaptif: observasi validasi dikeluarkan dari estimasi
-  w_i <- bobot_adaptif_cv(dist_lso[i, ],i = i,k = bw_lso)
-  
-  # Estimasi koefisien lokal
-  fit_gwnbr_i <- tryCatch(
-    fit_gwnbr_local(X = X_lso,Y = Y_lso,offset_val = off_lso,theta = theta_i,
-                    W_i = w_i,beta_start = beta_i),
-    error = function(e) NULL
-  )
-  
-  if (is.null(fit_gwnbr_i) || !fit_gwnbr_i$konvergen) {
-    next
-  }
-  
-  # Prediksi wilayah yang dikeluarkan
-  eta_i <- sum(X_lso[i, ] * fit_gwnbr_i$beta) + off_lso[i]
-  
-  pred_gwnbr_lso[i] <- exp(pmin(pmax(eta_i, -20), 20))
-  
-  theta_gwnbr_fold[i] <- theta_i
+  do.call(rbind, hasil_fold)
 }
 
-if (any(!is.finite(pred_gwnbr_lso))) {
-  stop(
-    "Terdapat prediksi LOOCV GWNBR yang tidak valid. ",
-    "Periksa konvergensi NBR dan GWNBR pada setiap fold."
-  )
-}
+# Jalankan nested LOOCV
+hasil_nested_lso <- nested_loocv_gwnbr_lso(
+  X = X_lso,
+  Y = Y_lso,
+  offset_val = off_lso,
+  dist_mat = dist_lso
+)
 
-# D. XGBOOST NESTED LOOCV PADA 37 WILAYAH
-set.seed(123)
+# Tambahkan nilai aktual
+hasil_nested_lso$Aktual <- as.numeric(Y_lso)
 
+# Urutkan kolom
+hasil_nested_lso <- hasil_nested_lso[, c(
+  "Fold", "Aktual",
+  "Pred_Adaptive", "Pred_Gaussian",
+  "BW_Adaptive", "BW_Gaussian",
+  "AICc_Adaptive", "AICc_Gaussian"
+)]
+
+# Persiapan objek XGBoost LSO
 y_xgb_lso <- Y_lso
 offset_xgb_lso <- off_lso
 n_xgb_lso <- nrow(X_xgb_lso)
 
-grid_xgb_lso <- expand.grid(eta = c(0.03, 0.05, 0.10),max_depth = c(2, 3),min_child_weight = c(1, 3))
+stopifnot(
+  n_xgb_lso == 37,
+  length(y_xgb_lso) == n_xgb_lso,
+  length(offset_xgb_lso) == n_xgb_lso
+)
+
+# D1. Inner LOOCV untuk tuning
+grid_xgb_lso <- expand.grid(eta = c(0.03, 0.05, 0.10),
+                            max_depth = c(2, 3),
+                            max_delta_step = c(0.3, 0.7, 1.0))
+stopifnot(nrow(grid_xgb_lso) == 18)
 
 buat_params_lso <- function(row) {
   list(
@@ -1549,15 +2958,13 @@ buat_params_lso <- function(row) {
     eval_metric = "rmse",
     eta = as.numeric(row$eta),
     max_depth = as.integer(row$max_depth),
-    min_child_weight = as.numeric(row$min_child_weight),
+    max_delta_step = as.numeric(row$max_delta_step),
     subsample = 0.70,
     colsample_bytree = 0.70,
-    nthread = 1,
-    seed = 123
+    nthread = 1
   )
 }
 
-# D1. Inner LOOCV untuk tuning
 tune_internal_lso <- function(idx_train) {
   
   dtrain_inner <- xgb.DMatrix(data = X_xgb_lso[idx_train, , drop = FALSE],
@@ -1586,7 +2993,7 @@ tune_internal_lso <- function(idx_train) {
     hasil[[g]] <- data.frame(
       eta = grid_xgb_lso$eta[g],
       max_depth = grid_xgb_lso$max_depth[g],
-      min_child_weight = grid_xgb_lso$min_child_weight[g],
+      max_delta_step = grid_xgb_lso$max_delta_step[g],
       subsample = 0.70,
       colsample_bytree = 0.70,
       best_nrounds = idx_best,
@@ -1605,7 +3012,7 @@ tune_internal_lso <- function(idx_train) {
 pred_xgb_lso <- rep(NA_real_, n_xgb_lso)
 parameter_xgb_lso <- vector("list", n_xgb_lso)
 tuning_xgb_lso <- vector("list", n_xgb_lso)
-
+set.seed(123)
 for (i in seq_len(n_xgb_lso)) {
   
   cat("XGBoost LSO outer fold", i, "dari", n_xgb_lso, "\n")
@@ -1633,7 +3040,7 @@ for (i in seq_len(n_xgb_lso)) {
     fold = i,
     eta = best_i$eta,
     max_depth = best_i$max_depth,
-    min_child_weight = best_i$min_child_weight,
+    max_delta_step = best_i$max_delta_step,
     subsample = best_i$subsample,
     colsample_bytree = best_i$colsample_bytree,
     nrounds = nrounds_i,
@@ -1643,32 +3050,43 @@ for (i in seq_len(n_xgb_lso)) {
 
 if (any(!is.finite(pred_xgb_lso))) {stop("Terdapat prediksi nested LOOCV XGBoost yang tidak valid.")}
 
-# E. EVALUASI LOOCV KEEMPAT MODEL PADA 37 WILAYAH
-pred_list_lso <- list("Baseline NB-offset" = pred_nb0_lso,"NBR" = pred_nbr_lso,
-                      "GWNBR Adaptive Bisquare" = pred_gwnbr_lso,"XGBoost" = pred_xgb_lso)
-
-hitung_evaluasi_lso <- function(y, pred) {
+## E. Evaluasi Nested LOOCV GWNBR LSO
+hitung_evaluasi_lso <- function(actual, pred) {
   
-  if (length(y) != length(pred) || any(!is.finite(pred))) {
-    stop("Panjang data tidak sesuai atau terdapat prediksi tidak valid.")
+  valid <- is.finite(actual) & is.finite(pred)
+  actual <- actual[valid]
+  pred <- pred[valid]
+  n_valid <- length(actual)
+  
+  if (n_valid < 2) {
+    return(data.frame(
+      N_Valid = n_valid,
+      R2_LOOCV = NA_real_,
+      RMSE_LOOCV = NA_real_,
+      MAE_LOOCV = NA_real_))
   }
   
-  SSE <- sum((y - pred)^2)
-  SST <- sum((y - mean(y))^2)
+  SSE <- sum((actual - pred)^2)
+  SST <- sum((actual - mean(actual))^2)
   
-  data.frame(R2 = 1 - SSE / SST,RMSE = sqrt(mean((y - pred)^2)),MAE = mean(abs(y - pred)))
+  data.frame(
+    N_Valid = n_valid,
+    R2_LOOCV = 1 - SSE / SST,
+    RMSE_LOOCV = sqrt(mean((actual - pred)^2)),
+    MAE_LOOCV = mean(abs(actual - pred))
+  )
 }
 
-hasil_evaluasi_lso <- do.call(
-  rbind,lapply(names(pred_list_lso), function(nm) {
-    
-    e <- hitung_evaluasi_lso(Y_lso,pred_list_lso[[nm]])
-    
-    data.frame(Model = nm,N = n_lso,R2_LOOCV = e$R2,RMSE_LOOCV = e$RMSE,MAE_LOOCV = e$MAE)
-  })
-)
+evaluasi_ad_lso <- hitung_evaluasi_lso(hasil_nested_lso$Aktual,
+                                       hasil_nested_lso$Pred_Adaptive)
 
-rownames(hasil_evaluasi_lso) <- NULL
+evaluasi_ga_lso <- hitung_evaluasi_lso(hasil_nested_lso$Aktual,
+                                       hasil_nested_lso$Pred_Gaussian)
+
+hasil_evaluasi_gwnbr_lso <- rbind(
+  cbind(Model = "GWNBR Adaptive Bisquare",evaluasi_ad_lso),
+  cbind(Model = "GWNBR Fixed Gaussian",evaluasi_ga_lso)
+)
 
 # F. MODEL FINAL XGBOOST PADA 37 WILAYAH
 hasil_tuning_final_lso <- tune_internal_lso(seq_len(n_xgb_lso))
@@ -1689,44 +3107,46 @@ xgb_final_lso <- xgb.train(params = params_final_lso,data = dtrain_final_lso,
 # Prediksi in-sample model final (bukan metrik LOOCV)
 pred_xgb_final_lso <- as.numeric(predict(xgb_final_lso, dtrain_final_lso))
 
-# G. ESTIMASI AKHIR GWNBR PADA 37 WILAYAH
-beta_gwnbr_lso <- matrix(NA_real_,nrow = n_lso,ncol = n_vars_lso)
-
-se_gwnbr_lso <- matrix(NA_real_,nrow = n_lso,ncol = n_vars_lso)
-
-pred_gwnbr_fit_lso <- rep(NA_real_, n_lso)
-fit_gwnbr_lso_simpan <- vector("list", n_lso)
+## G. Estimasi akhir GWNBR pada 37 wilayah
+# 1. ADAPTIVE BISQUARE
+hasil_gwnbr_lso_ad <- vector("list", n_lso)
 
 for (i in seq_len(n_lso)) {
-  
-  w_i <- bobot_adaptif(dist_lso[i, ], bw_lso)
-  
-  fit_i <- tryCatch(
-    fit_gwnbr_local(X = X_lso,Y = Y_lso,offset_val = off_lso,theta = theta_lso,
-                    W_i = w_i,beta_start = beta_lso_global),
-    error = function(e) NULL
+  W_i <- bobot_adaptif(dist_lso[i, ],bw_lso)
+  hasil_gwnbr_lso_ad[[i]] <- fit_gwnbr_local(
+    X = X_lso,
+    Y = Y_lso,
+    offset_val = off_lso,
+    theta = theta_lso,
+    W_i = W_i,
+    beta_start = beta_start_lso
   )
-  
-  if (is.null(fit_i) || !fit_i$konvergen) next
-  
-  fit_gwnbr_lso_simpan[[i]] <- fit_i
-  beta_gwnbr_lso[i, ] <- fit_i$beta
-  se_gwnbr_lso[i, ] <- fit_i$se
-  pred_gwnbr_fit_lso[i] <- fit_i$y_hat[i]
 }
 
-if (any(!is.finite(pred_gwnbr_fit_lso))) {stop("Terdapat estimasi GWNBR akhir yang tidak konvergen.")}
+beta_lokal_ad_lso <- do.call(rbind,
+  lapply(hasil_gwnbr_lso_ad, function(x) x$beta))
 
-colnames(beta_gwnbr_lso) <- paste0("Beta_", coef_names_lso)
-colnames(se_gwnbr_lso) <- paste0("SE_", coef_names_lso)
+# 2. FIXED GAUSSIAN
+hasil_gwnbr_lso_ga <- vector("list", n_lso)
 
-hasil_koef_gwnbr_lso <- data.frame(
-  Kabupaten = df_lso$Kabupaten,
-  as.data.frame(beta_gwnbr_lso),
-  as.data.frame(se_gwnbr_lso),
-  Y_Aktual = Y_lso,
-  Y_Prediksi = pred_gwnbr_fit_lso
-)
+for (i in seq_len(n_lso)) {
+  W_i <- bobot_fixed_gaussian(dist_lso[i, ],bw_gauss_lso)
+  hasil_gwnbr_lso_ga[[i]] <- fit_gwnbr_local(
+    X = X_lso,
+    Y = Y_lso,
+    offset_val = off_lso,
+    theta = theta_lso,
+    W_i = W_i,
+    beta_start = beta_start_lso
+  )
+}
+
+beta_lokal_ga_lso <- do.call(rbind,lapply(hasil_gwnbr_lso_ga, function(x) x$beta))
+
+colnames(beta_lokal_ad_lso) <- colnames(X_lso)
+colnames(beta_lokal_ga_lso) <- colnames(X_lso)
+rownames(beta_lokal_ad_lso) <- df_lso$Kabupaten_Kota
+rownames(beta_lokal_ga_lso) <- df_lso$Kabupaten_Kota
 
 # H. REKAP PARAMETER MODEL GLOBAL
 # Model Baseline NB-offset pada 37 wilayah (tanpa Surabaya)
@@ -1738,15 +3158,92 @@ hasil_parameter_global_lso <- data.frame(
   AIC = c(AIC(model_nb0_no_sby),AIC(model_nbr_lso))
 )
 
-# I. TABEL PREDIKSI LOOCV
+# I. TABEL PREDIKSI NESTED LOOCV
 hasil_prediksi_lso <- data.frame(
   Kabupaten = df_lso$Kabupaten,
   Y_Aktual = Y_lso,
   Baseline_NB_offset = pred_nb0_lso,
   NBR = pred_nbr_lso,
-  GWNBR_Adaptive_Bisquare = pred_gwnbr_lso,
+  GWNBR_Adaptive_Bisquare = hasil_nested_lso$Pred_Adaptive,
+  GWNBR_Fixed_Gaussian = hasil_nested_lso$Pred_Gaussian,
   XGBoost = pred_xgb_lso
 )
+
+# TABEL 11. EVALUASI LOOCV LSO KELIMA MODEL
+# Fungsi evaluasi LOOCV
+hitung_evaluasi_lso <- function(actual, pred, populasi) {
+
+  valid <- is.finite(actual) & 
+           is.finite(pred) & 
+           is.finite(populasi) & 
+           populasi > 0
+
+  actual <- actual[valid]
+  pred <- pred[valid]
+  populasi <- populasi[valid]
+
+  n_valid <- length(actual)
+
+  if (n_valid < 2) {
+    return(data.frame(
+      N = n_valid,
+      R2 = NA_real_,
+      RMSE = NA_real_,
+      RMSE_per_100000 = NA_real_,
+      MAE = NA_real_
+    ))
+  }
+
+  SSE <- sum((actual - pred)^2)
+  SST <- sum((actual - mean(actual))^2)
+
+  data.frame(
+    N = n_valid,
+    R2 = 1 - SSE / SST,
+    RMSE = sqrt(mean((actual - pred)^2)),
+    RMSE_per_100000 = sqrt(mean(
+      ((actual - pred) / populasi * 100000)^2
+    )),
+    MAE = mean(abs(actual - pred))
+  )
+}
+
+# Prediksi kelima model
+prediksi_lima_model_lso <- list(
+  "Baseline NB-offset" = hasil_prediksi_lso$Baseline_NB_offset,
+  "NBR" = hasil_prediksi_lso$NBR,
+  "GWNBR Adaptive Bisquare" = hasil_prediksi_lso$GWNBR_Adaptive_Bisquare,
+  "GWNBR Fixed Gaussian" = hasil_prediksi_lso$GWNBR_Fixed_Gaussian,
+  "Poisson XGBoost" = hasil_prediksi_lso$XGBoost
+)
+
+# Mengambil populasi usia 15 tahun ke atas dari offset LSO
+populasi_15_lso <- exp(off_lso)
+
+# Memastikan jumlah dan urutan data
+length(Y_lso)
+length(populasi_15_lso)
+
+# Menghitung evaluasi masing-masing model
+tabel11_lso <- do.call(
+  rbind, lapply(names(prediksi_lima_model_lso), function(nama_model) {
+    
+    hasil <- hitung_evaluasi_lso(
+      actual = Y_lso,
+      pred = prediksi_lima_model_lso[[nama_model]],
+      populasi = populasi_15_lso
+    )
+    
+    cbind(Model = nama_model, hasil)
+  })
+)
+
+rownames(tabel11_lso) <- NULL
+
+# Memastikan seluruh model memiliki 37 prediksi valid
+stopifnot(all(tabel11_lso$N == 37))
+
+tabel11_naskah <- tabel11_lso[, c("Model", "R2", "RMSE", "MAE", "RMSE_per_100000")]
 
 # PERBANDINGAN PARAMETER SEBELUM DAN SESUDAH SURABAYA DIKELUARKAN
 # 1. PERBANDINGAN PARAMETER NBR
@@ -1770,7 +3267,15 @@ hasil_perbandingan_nbr$Perubahan <-
 
 # 2. PERBANDINGAN KOEFISIEN LOKAL GWNBR
 hasil_38 <- hasil_gwnbr
-hasil_37 <- hasil_koef_gwnbr_lso
+hasil_37 <- data.frame(
+  Kabupaten = df_lso$Kabupaten,
+  Beta_Intercept = beta_lokal_ad_lso[, "(Intercept)"],
+  Beta_X1 = beta_lokal_ad_lso[, "X1"],
+  Beta_X2 = beta_lokal_ad_lso[, "X2"],
+  Beta_X3 = beta_lokal_ad_lso[, "X3"],
+  Beta_X4 = beta_lokal_ad_lso[, "X4"],
+  Beta_X5 = beta_lokal_ad_lso[, "X5"]
+)
 
 # Samakan nama kolom intercept
 names(hasil_37)[
@@ -1817,6 +3322,25 @@ ringkasan_gwnbr <- data.frame(
     sum(a * b < 0, na.rm = TRUE)})
 )
 
+# TABEL 12. PERBANDINGAN PARAMETER NBR DAN GWNBR
+tabel12_lso <- data.frame(
+  Variabel = c("Intercept", "X1", "X2", "X3", "X4", "X5", "Theta"),
+  NBR_38 = c(unname(parameter_nbr_38),model_nbr$theta),
+  NBR_37 = c(unname(parameter_nbr_37),model_nbr_lso$theta),
+  GWNBR_mean_38 = c(ringkasan_gwnbr$Rata_rata_38,NA_real_),
+  GWNBR_mean_37 = c(ringkasan_gwnbr$Rata_rata_37,NA_real_))
+
+# Format empat angka desimal
+tabel12_naskah <- tabel12_lso
+kolom_numerik <- c("NBR_38", "NBR_37","GWNBR_mean_38", "GWNBR_mean_37")
+
+for (kolom in kolom_numerik) {
+  tabel12_naskah[[kolom]] <- ifelse(
+    is.na(tabel12_lso[[kolom]]),"–",
+    formatC(tabel12_lso[[kolom]],format = "f",digits = 4)
+  )
+}
+
 # 4. IDENTIFIKASI WILAYAH YANG BERUBAH TANDA KOEFISIEN
 # Perubahan tanda koefisien X3
 perubahan_tanda_X3 <- subset(perbandingan_gwnbr,Beta_X3_38 * Beta_X3_37 < 0,
@@ -1826,12 +3350,19 @@ perubahan_tanda_X3 <- subset(perbandingan_gwnbr,Beta_X3_38 * Beta_X3_37 < 0,
 perubahan_tanda_X5 <- subset(perbandingan_gwnbr,Beta_X5_38 * Beta_X5_37 < 0,
   select = c(Kabupaten,Beta_X5_38,Beta_X5_37,Beta_X5_Perubahan))
 
+
 # 5. SIMPAN SELURUH HASIL KE EXCEL
 openxlsx::write.xlsx(
   list(
-    Evaluasi_LOOCV = hasil_evaluasi_lso,
+    Tabel_11_Evaluasi_LOOCV = tabel11_naskah,
+    Tabel_12_Perbandingan_Parameter = tabel12_naskah,
+    Ringkasan_Bandwidth = ringkasan_bw_lso,
+    Profil_Bandwidth = profil_bw_lso,
+    Hasil_Nested_LOOCV_GWNBR = hasil_nested_lso,
+    Evaluasi_LOOCV_GWNBR = hasil_evaluasi_gwnbr_lso,
+    Koefisien_Adaptive = as.data.frame(beta_lokal_ad_lso),
+    Koefisien_Fixed_Gaussian = as.data.frame(beta_lokal_ga_lso),
     Prediksi_LOOCV = hasil_prediksi_lso,
-    Koefisien_Lokal_GWNBR = hasil_koef_gwnbr_lso,
     Parameter_Global = hasil_parameter_global_lso,
     Parameter_Nested_XGB = do.call(rbind, parameter_xgb_lso),
     Tuning_Nested_XGB = do.call(rbind, tuning_xgb_lso),
@@ -1840,7 +3371,8 @@ openxlsx::write.xlsx(
     Perbandingan_Koefisien_GWNBR = perbandingan_gwnbr,
     Ringkasan_Perubahan_GWNBR = ringkasan_gwnbr,
     Perubahan_Tanda_X3 = perubahan_tanda_X3,
-    Perubahan_Tanda_X5 = perubahan_tanda_X5),
+    Perubahan_Tanda_X5 = perubahan_tanda_X5
+  ),
   
   file.path(folder_out_07,"07_Seluruh_Hasil_LOSO_37_Wilayah.xlsx"),
   overwrite = TRUE
@@ -1852,148 +3384,156 @@ openxlsx::write.xlsx(
 folder_out_08 <- file.path(path_folder, "08_Perbandingan")
 dir.create(folder_out_08, showWarnings = FALSE, recursive = TRUE)
 
+# 1. PERSIAPAN DAN PENYELARASAN HASIL PREDIKSI
 n_loo <- nrow(df_model)
+
 y_aktual <- as.numeric(df_model$Y)
 pop <- as.numeric(df_model$Jumlah_Penduduk)
+nama_wilayah <- as.character(df_model$Kabupaten)
 
-# 1. LOOCV BASELINE NB-OFFSET & NBR
-pred_nb0_loo <- numeric(n_loo)
-y_pred_nbr_loo <- numeric(n_loo)
+# Pastikan seluruh prediksi berasal dari 38 wilayah yang sama
+stopifnot(length(pred_nb0_loo) == n_loo)
+stopifnot(length(y_pred_nbr_loo) == n_loo)
 
-for (i in seq_len(n_loo)) {
-  # Baseline NB
-  fit_nb0 <- MASS::glm.nb(Y ~ 1 + offset(log(Jumlah_Penduduk)), data = df_model[-i, ])
-  pred_nb0_loo[i] <- predict(fit_nb0, newdata = df_model[i, ], type = "response")
-  
-  # Global NBR
-  fit_nbr <- MASS::glm.nb(formula_nbr, data = df_model[-i, ])
-  y_pred_nbr_loo[i] <- predict(fit_nbr, newdata = df_model[i, ], type = "response")}
+# Nested LOOCV GWNBR
+idx_gwnbr <- match(nama_wilayah,hasil_prediksi_nested$Kabupaten)
 
-# Fungsi prediksi satu fold LOOCV GWNBR
-cv_gwnbr_predict_one <- function(i, data, coords) {
-  
-  idx_train <- setdiff(seq_len(nrow(data)), i)
-  
-  # Estimasi NBR pada data training
-  fit_global_i <- tryCatch(
-    suppressWarnings(
-      MASS::glm.nb(
-        formula_nbr,
-        data = data[idx_train, , drop = FALSE]
-      )
-    ),
-    error = function(e) NULL
-  )
-  
-  if (is.null(fit_global_i)) {
-    return(NA_real_)
-  }
-  
-  theta_i <- fit_global_i$theta
-  beta_i <- as.numeric(coef(fit_global_i))
-  
-  # Matriks desain dan data respons
-  X_i <- as.matrix(model.matrix(~ X1 + X2 + X3 + X4 + X5,data = data))
-  
-  Y_i <- as.numeric(data$Y)
-  off_i <- log(as.numeric(data$Jumlah_Penduduk))
-  
-  # Jarak antarwilayah
-  dists_i <- as.matrix(dist(coords))[i, ]
-  
-  # Bobot adaptive bisquare dengan bandwidth tetap
-  W_i <- bobot_adaptif_cv(dists_i, i, bw_opt)
-  
-  # Estimasi GWNBR lokal
-  fit_local_i <- tryCatch(
-    fit_gwnbr_local(
-      X = X_i,
-      Y = Y_i,
-      offset_val = off_i,
-      theta = theta_i,
-      W_i = W_i,
-      beta_start = beta_i
-    ),
-    error = function(e) NULL
-  )
-  
-  if (is.null(fit_local_i) || !fit_local_i$konvergen) {
-    return(NA_real_)
-  }
-  
-  # Prediksi wilayah yang ditinggalkan
-  eta_i <- sum(X_i[i, ] * fit_local_i$beta) + off_i[i]
-  
-  exp(pmin(pmax(eta_i, -20), 20))
-}
+# Nested LOOCV XGBoost
+idx_xgb <- match(nama_wilayah,df_01_pred_xgb$Kabupaten)
 
-# 2. LOOCV GWNBR (Menggunakan fungsi helper agar loop bersih)
-y_pred_gwnbr_loo <- sapply(seq_len(n_loo), function(i) cv_gwnbr_predict_one(i, df_model, coords))
+stopifnot(!anyNA(idx_gwnbr))
+stopifnot(!anyNA(idx_xgb))
 
-# 3. PENYELARASAN PREDIKSI & METRIK EVALUASI
+# Ambil prediksi GWNBR kedua kernel
+pred_adaptive <- hasil_prediksi_nested$Prediksi_Adaptive[idx_gwnbr]
+pred_gaussian <- hasil_prediksi_nested$Prediksi_Gaussian[idx_gwnbr]
+
+# Ambil prediksi XGBoost
+pred_xgb <- df_01_pred_xgb$Y_Prediksi_Nested_LOOCV[idx_xgb]
+
+# Periksa jumlah prediksi valid
+jumlah_valid <- c(
+  Baseline_NB = sum(is.finite(pred_nb0_loo)),
+  NBR = sum(is.finite(y_pred_nbr_loo)),
+  GWNBR_Adaptive = sum(is.finite(pred_adaptive)),
+  GWNBR_Gaussian = sum(is.finite(pred_gaussian)),
+  XGBoost = sum(is.finite(pred_xgb))
+)
+
+# 2. MENYELARASKAN SELURUH PREDIKSI
 pred_list <- list(
-  "Baseline NB-offset" = pred_nb0_loo,
-  "NBR"                = y_pred_nbr_loo,
-  "GWNBR"              = y_pred_gwnbr_loo,
-  "XGBoost"            = as.numeric(pred_outer))
+  "Baseline NB-offset" = as.numeric(pred_nb0_loo),
+  "NBR" = as.numeric(y_pred_nbr_loo),
+  "GWNBR Adaptive Bisquare" = as.numeric(pred_adaptive),
+  "GWNBR Fixed Gaussian" = as.numeric(pred_gaussian),
+  "XGBoost" = as.numeric(pred_xgb)
+)
 
+# Tabel aktual dan prediksi
+df_01_match <- data.frame(Kabupaten = nama_wilayah,
+                          Y_Aktual = y_aktual,
+                          as.data.frame(pred_list, check.names = FALSE))
+
+# 3. EVALUASI KINERJA MODEL
 rate_actual <- y_aktual / pop * 100000
 
-tabel9 <- do.call(rbind, lapply(names(pred_list), function(nm) {
-  p <- pred_list[[nm]]
-  e <- hitung_evaluasi(y_aktual, p)
-  r <- p / pop * 100000
-  data.frame(
-    Model = nm, 
-    R2 = round(e$R2, 4), 
-    RMSE = round(e$RMSE, 2), 
-    MAE = round(e$MAE, 2),
-    RMSE_rate_100k = round(sqrt(mean((rate_actual - r)^2)), 2),
-    MAE_rate_100k  = round(mean(abs(rate_actual - r)), 2))}))
+tabel9 <- do.call(
+  rbind,
+  lapply(names(pred_list), function(nm) {
+    
+    p <- pred_list[[nm]]
+    
+    valid <- is.finite(y_aktual) &
+      is.finite(p) &
+      is.finite(pop) &
+      pop > 0
+    
+    actual <- y_aktual[valid]
+    pred <- p[valid]
+    rate_act <- rate_actual[valid]
+    rate_pred <- pred / pop[valid] * 100000
+    
+    e <- hitung_evaluasi(actual, pred)
+    
+    data.frame(
+      Model = nm,
+      N_Valid = length(actual),
+      R2 = round(e$R2, 4),
+      RMSE = round(e$RMSE, 2),
+      MAE = round(e$MAE, 2),
+      RMSE_rate_100k = round(sqrt(mean((rate_act - rate_pred)^2)), 2),
+      MAE_rate_100k = round(mean(abs(rate_act - rate_pred)), 2)
+    )
+  })
+)
 
-# Menghitung kesalahan absolut setiap model
-err_baseline <- abs(y_aktual - pred_nb0_loo)
-err_nbr      <- abs(y_aktual - y_pred_nbr_loo)
-err_gwnbr    <- abs(y_aktual - y_pred_gwnbr_loo)
-err_xgb      <- abs(y_aktual - as.numeric(pred_outer))
+# 4. KESALAHAN ABSOLUT SETIAP MODEL
+errors <- data.frame(
+  Wilayah = nama_wilayah,
+  Y_Aktual = y_aktual,
+  Baseline_NB_offset = abs(y_aktual - pred_list[["Baseline NB-offset"]]),
+  NBR = abs(y_aktual - pred_list[["NBR"]]),
+  GWNBR_Adaptive = abs(y_aktual - pred_list[["GWNBR Adaptive Bisquare"]]),
+  GWNBR_Gaussian = abs(y_aktual - pred_list[["GWNBR Fixed Gaussian"]]),
+  XGBoost = abs(y_aktual - pred_list[["XGBoost"]])
+)
 
-# Menggabungkan kesalahan absolut
-errors <- data.frame(Wilayah = df_model$Kabupaten,Y_Aktual = y_aktual,Baseline_NB_offset = err_baseline,
-                     NBR = err_nbr,GWNBR = err_gwnbr,XGBoost = err_xgb)
-
-print(errors)
-# Uji Wilcoxon berpasangan
-kolom_model <- c("Baseline_NB_offset","NBR","GWNBR","XGBoost")
+# 5. UJI WILCOXON BERPASANGAN
+kolom_model <- c("Baseline_NB_offset","NBR","GWNBR_Adaptive",
+                 "GWNBR_Gaussian","XGBoost")
 
 pairs <- combn(kolom_model, 2, simplify = FALSE)
 
-hasil_wilcoxon <- do.call(rbind, lapply(pairs, function(p) {
-  
-  test <- wilcox.test(errors[[p[1]]],errors[[p[2]]],paired = TRUE,exact = FALSE)
-  
-  data.frame(Model_1 = p[1],Model_2 = p[2],W = unname(test$statistic),p_value = test$p.value)
-}))
+hasil_wilcoxon <- do.call(
+  rbind,
+  lapply(pairs, function(p) {
+    
+    valid <- is.finite(errors[[p[1]]]) &
+      is.finite(errors[[p[2]]])
+    
+    test <- wilcox.test(
+      errors[[p[1]]][valid],
+      errors[[p[2]]][valid],
+      paired = TRUE,
+      exact = FALSE
+    )
+    
+    data.frame(
+      Model_1 = p[1],
+      Model_2 = p[2],
+      N_Pasangan = sum(valid),
+      W = unname(test$statistic),
+      p_value = test$p.value
+    )
+  })
+)
 
-print(hasil_wilcoxon)
+# Koreksi pengujian berganda
+hasil_wilcoxon$p_adjusted <- p.adjust(hasil_wilcoxon$p_value,
+                                      method = "holm")
 
-hasil_wilcoxon$p_adjusted <- p.adjust(hasil_wilcoxon$p_value,method = "holm")
+# 6. TABEL AIC, AICc, DAN LOG-LIKELIHOOD
+# Ambil Baseline NB-offset dan NBR dari Tahap 2
+tabel_nbr_pilih <- tabel_aicc %>%
+  dplyr::filter(Model %in% c("Baseline NB-offset", "NBR (penuh)")) %>%
+  dplyr::transmute(Model,Param_Efektif = Jumlah_Param,Log_Likelihood,AIC,AICc)
 
-print(hasil_wilcoxon)
+# Ambil GWNBR Adaptive Bisquare dari Tahap 4
+tabel_gwnbr_pilih <- tabel_aicc_gwnbr %>%
+  dplyr::filter(
+    Model %in% c("GWNBR Adaptive Bisquare","GWNBR Fixed Gaussian")) %>%
+  dplyr::select(Model,Param_Efektif,Log_Likelihood,AIC,AICc)
 
-# 5. AKOMODASI TABEL RESIDUAL & AIC/AICc
-df_01_match <- data.frame(Kabupaten = df_model$Kabupaten, Y_Aktual = y_aktual, as.data.frame(pred_list))
+tabel_aicc_gabungan <- dplyr::bind_rows(tabel_nbr_pilih,tabel_gwnbr_pilih)
 
-ic_nb0 <- hitung_ic(model_nb0, "Baseline NB-offset")
-ic_nbr <- hitung_ic(model_nbr, "NBR")
-df_06_aicc <- tibble(
-  Model = c("Baseline NB-offset", "NBR", "GWNBR"),
-  Param_Efektif = round(c(ic_nb0$Jumlah_Param, ic_nbr$Jumlah_Param, k_par_gwnbr), 2),
-  Log_Likelihood = round(c(ic_nb0$Log_Likelihood, ic_nbr$Log_Likelihood, ll_gwnbr), 3),
-  AIC = round(c(ic_nb0$AIC, ic_nbr$AIC, aic_gwnbr), 3),
-  AICc = round(c(ic_nb0$AICc, ic_nbr$AICc, aicc_gwnbr), 3))
+# 7. EKSPOR SELURUH HASIL
+list_sheets <- list(
+  "Tabel Perbandingan" = tabel9,
+  "Match Prediksi" = df_01_match,
+  "Kesalahan Absolut" = errors,
+  "Hasil Wilcoxon" = hasil_wilcoxon,
+  "AIC AICc" = tabel_aicc_gabungan
+)
 
-# Ekspor Excel
-list_sheets <- list("Tabel Perbandingan" = tabel9, "Match Prediksi" = df_01_match, 
-                    "AIC AICc" = df_06_aicc, "hasil wilcoxon" = hasil_wilcoxon)
-writexl::write_xlsx(list_sheets, file.path(folder_out_08, "08_Laporan_Perbandingan_4_Model.xlsx"))
+writexl::write_xlsx(list_sheets,file.path(folder_out_08,"08_Laporan_Perbandingan_5_Model.xlsx"))
 
